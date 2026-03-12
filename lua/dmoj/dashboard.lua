@@ -87,17 +87,19 @@ local function build_dashboard(width)
   local cookie = auth.get_cookie()
 
   local items = {
-    { key = "l", icon = "", label = "Problems" },
-    { key = "c", icon = "", label = "Contests" },
-    { key = "s", icon = "", label = "Submissions" },
-    { key = "o", icon = "", label = "Open in Browser" },
+    { key = "p", icon = "", label = "Problems" },
+    { key = "s", icon = "󰄪", label = "Submissions" },
+    { key = "c", icon = "", label = "Contests" },
+    { key = "o", icon = "", label = "Open in Browser" },
     { key = "i", icon = "󰆘", label = "Cookie" },
     { key = "q", icon = "󰩈", label = "Exit" },
   }
 
+  table.insert(lines, center("Menu"))
+  table.insert(lines, "")
+
   for _, item in ipairs(items) do
-    -- Build: " icon  Label" then pad to MENU_WIDTH then append shortcut
-    local left = " " .. item.icon .. "  " .. item.label
+    local left = " " .. item.icon .. " " .. item.label .. " >"
     local left_w = vim.fn.strdisplaywidth(left)
     local sc = item.key
     local sc_w = vim.fn.strdisplaywidth(sc)
@@ -108,6 +110,7 @@ local function build_dashboard(width)
     local row = #lines
     key_map[row] = item.key
     table.insert(button_rows, row)
+    table.insert(lines, "")
   end
 
   table.insert(lines, "")
@@ -159,6 +162,12 @@ local function apply_highlights(bufnr, button_rows)
       if content_start then
         -- Icon: first multibyte char cluster (nerd font icon, ~3 bytes)
         vim.api.nvim_buf_add_highlight(bufnr, ns, "Special", row, content_start - 1, content_start + 3)
+        
+        -- Find the > arrow
+        local arrow_pos = line:find(">")
+        if arrow_pos then
+          vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", row, arrow_pos - 1, arrow_pos)
+        end
 
         -- Shortcut key: last non-space char
         local trimmed = vim.trim(line)
@@ -254,8 +263,8 @@ function M.open()
   -- Keymaps
   local kopts = { buffer = bufnr, nowait = true, silent = true }
 
-  -- [l] Problems
-  vim.keymap.set("n", "l", function()
+  -- [p] Problems
+  vim.keymap.set("n", "p", function()
     require("dmoj.problems").open()
   end, kopts)
 

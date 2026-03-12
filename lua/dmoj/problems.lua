@@ -514,6 +514,13 @@ function M.open_problem(code)
 
     -- Store problem metadata on the buffer for submit to use
     local bufnr = vim.api.nvim_get_current_buf()
+    
+    -- Enable line numbers for the code buffer
+    local win = vim.api.nvim_get_current_win()
+    vim.wo[win].number = true
+    vim.wo[win].relativenumber = false
+    vim.wo[win].signcolumn = "yes"
+    
     vim.b[bufnr].dmoj_problem_code = code
     vim.b[bufnr].dmoj_language = lang
 
