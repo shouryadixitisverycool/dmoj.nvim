@@ -16,26 +16,46 @@ local ui = require("dmoj.ui")
 local function derive_result(cases, case_points, case_total, current_result)
   local result = current_result or "??"
   if cases and #cases > 0 then
+    local counts = {}
     local all_ac = true
-    local has_tle, has_mle, has_rte, has_wa = false, false, false, false
+    
     for _, c in ipairs(cases) do
       if c.status ~= "AC" then
         all_ac = false
-        if c.status == "TLE" then has_tle = true
-        elseif c.status == "MLE" then has_mle = true
-        elseif c.status == "RTE" then has_rte = true
-        elseif c.status == "WA" then has_wa = true
+      end
+      counts[c.status] = (counts[c.status] or 0) + 1
+    end
+    
+    if all_ac then
+      result = "AC"
+    else
+      -- Priority for tie-breakers (lower index = higher priority)
+      local priority = { IE=1, CE=2, IR=3, RTE=4, MLE=5, TLE=6, OLE=7, WA=8, AC=99 }
+      
+      local best_status = nil
+      local best_count = -1
+      
+      for status, count in pairs(counts) do
+        if status ~= "AC" then
+          if count > best_count then
+            best_status = status
+            best_count = count
+          elseif count == best_count then
+            local p1 = priority[status] or 50
+            local p2 = priority[best_status] or 50
+            if p1 < p2 then
+              best_status = status
+            end
+          end
         end
       end
-    end
-    if all_ac then result = "AC"
-    elseif has_tle then result = "TLE"
-    elseif has_mle then result = "MLE"
-    elseif has_rte then result = "RTE"
-    elseif has_wa then result = "WA"
+      
+      if best_status then
+        result = best_status
+      end
     end
   end
-  -- Override from points when result contradicts score
+
   local pts = case_points or 0
   local tot = case_total or 0
   if tot > 0 and pts >= tot and result ~= "AC" then
@@ -49,6 +69,9 @@ end
 --- Language key -> DMOJ language ID cache, keyed by problem code.
 ---@type table<string, table<string, number>>
 local lang_id_cache = {}
+
+M._result_bufs = {}
+
 
 --- Fetch language IDs from the submit page HTML.
 ---@param problem_code string
@@ -520,43 +543,7 @@ end
 ---@param submission_id number
 ---@param attempt? number
 function M.poll_result(submission_id, attempt)
-  attempt = attempt or 1
-  if attempt > 60 then
-    ui.notify("Timed out waiting for submission " .. submission_id, vim.log.levels.WARN)
-    return
-  end
-
-  -- Try API first, then fall back to scraping
-  api.submission(submission_id, function(data, err)
-    if err then
-      -- On first few attempts, the submission might not be registered yet
-      if attempt < 3 then
-        vim.defer_fn(function()
-          M.poll_result(submission_id, attempt + 1)
-        end, 2000)
-        return
-      end
-
-      -- API failed after retries, try scraping the submission page
-      M.poll_result_scrape(submission_id, attempt)
-      return
-    end
-
-    local status = data.status or ""
-
-    -- status "D" means done, "P" means processing, "G" means grading
-    if status == "D" then
-      -- Always scrape the submission page for test case details,
-      -- since the API often doesn't include per-case breakdown
-      scrape_submission_details(submission_id, data, function(augmented)
-        M.show_result(augmented)
-      end)
-    else
-      vim.defer_fn(function()
-        M.poll_result(submission_id, attempt + 1)
-      end, 1500)
-    end
-  end)
+  M.poll_result_scrape(submission_id, attempt or 1)
 end
 
 --- Poll submission result by scraping the HTML submission page.
@@ -608,25 +595,6 @@ function M.poll_result_scrape(submission_id, attempt)
       result = vim.trim(result)
     end
 
-    -- If no result yet and appears to be processing, retry
-    if (not result or result == "") and is_processing then
-      vim.defer_fn(function()
-        M.poll_result_scrape(submission_id, attempt + 1)
-      end, 2000)
-      return
-    end
-
-    -- If we still don't have a result after many attempts, show what we have
-    if not result or result == "" then
-      if attempt < 15 then
-        vim.defer_fn(function()
-          M.poll_result_scrape(submission_id, attempt + 1)
-        end, 2000)
-        return
-      end
-      result = "??"
-    end
-
     local plain = body:gsub("<[^>]+>", "")
 
     -- Extract resource info
@@ -663,13 +631,19 @@ function M.poll_result_scrape(submission_id, attempt)
 
     local problem = plain:match('Submission of%s*(.-)%s*by') or "?"
 
+    local ce = body:match('Compilation Error.-<pre[^>]*>(.-)</pre>')
+    local compile_error = nil
+    if ce then
+      compile_error = ce:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&")
+    end
+
     -- Scrape test cases
     local cases = scrape_test_cases(plain)
 
     -- Build a result data table compatible with show_result
     local data = {
       id = submission_id,
-      result = result,
+      result = result or "Judging...",
       status = "D",
       case_points = points,
       case_total = total,
@@ -678,11 +652,28 @@ function M.poll_result_scrape(submission_id, attempt)
       problem = vim.trim(problem),
       language = "?",
       cases = cases,
+      compile_error = compile_error,
       _scraped = true,
     }
 
-    -- Derive correct result from test cases and points
-    data.result = derive_result(cases, points, total, data.result)
+    if is_processing then
+      M.show_result(data, true)
+      vim.defer_fn(function()
+        M.poll_result_scrape(submission_id, attempt + 1)
+      end, 1500)
+      return
+    end
+
+    -- If we still don't have a result after many attempts, show what we have
+    if not result or result == "" then
+      if attempt < 15 then
+        vim.defer_fn(function()
+          M.poll_result_scrape(submission_id, attempt + 1)
+        end, 2000)
+        return
+      end
+      data.result = "??"
+    end
 
     M.show_result(data)
   end)
@@ -718,7 +709,8 @@ end
 
 --- Display submission result in a floating window (leetcode.nvim-style).
 ---@param data table submission detail
-function M.show_result(data)
+---@param is_processing boolean|nil
+function M.show_result(data, is_processing)
   local result = data.result or "??"
   local points = data.case_points or 0
   local total = data.case_total or 0
@@ -797,6 +789,18 @@ function M.show_result(data)
   table.insert(lines, "")
   table.insert(lines, "  " .. sep)
   table.insert(lines, "")
+  -- Compile Error output
+  if data.compile_error and vim.trim(data.compile_error) ~= "" then
+    table.insert(lines, "  Compilation Error")
+    table.insert(hl_lines, { #lines - 1, "DiagnosticError", 0, -1 })
+    table.insert(lines, "")
+    for line in vim.gsplit(vim.trim(data.compile_error), "\n") do
+      table.insert(lines, "    " .. line)
+    end
+    table.insert(lines, "")
+    table.insert(lines, "  " .. sep)
+    table.insert(lines, "")
+  end
 
   -- Execution Results header
   table.insert(lines, "  Execution Results")
@@ -942,6 +946,9 @@ function M.show_result(data)
   local title_str = is_accepted
     and (" ✓ " .. verdict_label(result) .. " ")
     or (" ✗ " .. verdict_label(result) .. " ")
+  if is_processing then
+    title_str = " ⏳ Judging... " .. result .. " "
+  end
 
   local win = ui.open_float(bufnr, {
     title = title_str,
