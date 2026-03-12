@@ -1,0 +1,49 @@
+--- /home/sdixit/projects/dmoj.nvim/lua/dmoj/submit.lua
++++ /home/sdixit/projects/dmoj.nvim/lua/dmoj/submit.lua
+@@ -413,44 +413,38 @@
+ local function scrape_test_cases(plain)
+-  -- Convert HTML entities just in case (e.g., &nbsp;)
+-  plain = plain:gsub("&nbsp;", " "):gsub("p", " ")
++  -- Convert HTML entities just in case
++  plain = plain:gsub("&nbsp;", " "):gsub("\160", " ")
+ 
+   local cases = {}
+ 
+   -- Match "Test case #1: RTE (segmentation fault) [0.008s, 1.21 MB] (0/10)"
+   -- or "Case #1: WA [0.008s, 1.21 MB] (0/10)"
+   for case_id, status_raw, time_s, mem, unit, pts, total in
+-    plain:gmatch('#(%d+):%s*(.-)%s*%%%[%s*([%d%.]+)%s*s,%s*([%d%.]+)%s*(%wB)%s*%%%]%s*%%%(([%d%.]+)/([%d%.]+)%%%)')
++    plain:gmatch('#(%%d+):%%s*(.-)%%s*%%[%%s*(%%d%%.+)%%s*s,%%s*(%%d%%.+)%%s*(%%wB)%%s*%%]%%s*%%((%%d%%.+)/(%%d%%.+)%%)')
+   do
+-    local status = status_raw:match("^%s*(%S+)") or status_raw
+-    local extra = status_raw:match("^%s*%S+%s+(.*)$") or ""
++    local status = status_raw:match("^%%s*(%%S+)") or status_raw
++    local extra = status_raw:match("^%%s*%%S+%%s+(.*)$") or ""
+     table.insert(cases, {
+       type = "case",
+       case_id = tonumber(case_id) or 0,
+       status = vim.trim(status):upper(),
+       extra = vim.trim(extra),
+       time = tonumber(time_s) or 0,
+       memory = unit:upper() == "MB" and ((tonumber(mem) or 0) * 1024) or (tonumber(mem) or 0),
+       points = tonumber(pts) or 0,
+       total = tonumber(total) or 0,
+     })
+   end
+ 
+   if #cases == 0 then
+     -- fallback for cases with no resources (like CE, IR)
+-    for case_id, status_raw in plain:gmatch('#(%d+):%s*([A-Za-z]+)') do
++    for case_id, status_raw in plain:gmatch('#(%%d+):%%s*([A-Za-z]+)') do
+       table.insert(cases, {
+         type = "case",
+         case_id = tonumber(case_id) or 0,
+         status = vim.trim(status_raw):upper(),
+         extra = "",
+         time = 0, memory = 0, points = 0, total = 0
+       })
+     end
+   end
+ 
+   return cases
+ end

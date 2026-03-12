@@ -634,6 +634,8 @@ function M.poll_result_scrape(submission_id, attempt)
     local ce = body:match('Compilation Error.-<pre[^>]*>(.-)</pre>')
     local compile_error = nil
     if ce then
+      -- Strip any internal HTML tags (like <span>)
+      ce = ce:gsub("<[^>]+>", "")
       compile_error = ce:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&")
     end
 
@@ -715,8 +717,13 @@ function M.show_result(data, is_processing)
   local points = data.case_points or 0
   local total = data.case_total or 0
 
-  -- Derive correct result from points if the API result seems wrong
-  result = derive_result(data.cases, points, total, result)
+  -- Compile error override
+  if data.compile_error and vim.trim(data.compile_error) ~= "" then
+    result = "CE"
+  else
+    -- Derive correct result from points if the API result seems wrong
+    result = derive_result(data.cases, points, total, result)
+  end
   data.result = result
 
   local is_accepted = (result == "AC")
@@ -752,155 +759,140 @@ function M.show_result(data, is_processing)
   table.insert(hl_lines, { title_row, verdict_hl(result), 0, -1 })
   table.insert(lines, "")
 
-  -- Score line
-  local score_line = string.format("  Score: %.0f/%.0f", points, total)
-  if total > 0 then
-    score_line = score_line .. string.format("  (%.0f%%)", (points / total) * 100)
-  end
-  local score_row = #lines
-  table.insert(lines, score_line)
-  if points >= total and total > 0 then
-    table.insert(hl_lines, { score_row, "DiagnosticOk", 0, -1 })
-  elseif points > 0 then
-    table.insert(hl_lines, { score_row, "DiagnosticWarn", 0, -1 })
-  elseif total > 0 then
-    table.insert(hl_lines, { score_row, "DiagnosticError", 0, -1 })
-  end
-
-  table.insert(lines, "")
-
-  -- Resources
-  local time_display = data.time or 0
-  local mem_display = data.memory or 0
-  local mem_str
-  if mem_display >= 1024 then
-    mem_str = string.format("%.2f MB", mem_display / 1024)
-  else
-    mem_str = string.format("%.0f KB", mem_display)
-  end
-  table.insert(lines, string.format("  Resources: %.3fs, %s", time_display, mem_str))
-  if data.problem and data.problem ~= "?" then
-    table.insert(lines, "  Problem:   " .. data.problem)
-  end
-  if data.language and data.language ~= "?" then
-    table.insert(lines, "  Language:  " .. data.language)
-  end
-
-  table.insert(lines, "")
-  table.insert(lines, "  " .. sep)
-  table.insert(lines, "")
   -- Compile Error output
-  if data.compile_error and vim.trim(data.compile_error) ~= "" then
+  if result == "CE" and data.compile_error and vim.trim(data.compile_error) ~= "" then
     table.insert(lines, "  Compilation Error")
     table.insert(hl_lines, { #lines - 1, "DiagnosticError", 0, -1 })
     table.insert(lines, "")
     for line in vim.gsplit(vim.trim(data.compile_error), "\n") do
       table.insert(lines, "    " .. line)
     end
+  else
+    -- Score line
+    local score_line = string.format("  Score: %.0f/%.0f", points, total)
+    if total > 0 then
+      score_line = score_line .. string.format("  (%.0f%%)", (points / total) * 100)
+    end
+    local score_row = #lines
+    table.insert(lines, score_line)
+    if points >= total and total > 0 then
+      table.insert(hl_lines, { score_row, "DiagnosticOk", 0, -1 })
+    elseif points > 0 then
+      table.insert(hl_lines, { score_row, "DiagnosticWarn", 0, -1 })
+    elseif total > 0 then
+      table.insert(hl_lines, { score_row, "DiagnosticError", 0, -1 })
+    end
+
+    table.insert(lines, "")
+
+    -- Resources
+    local time_display = data.time or 0
+    local mem_display = data.memory or 0
+    local mem_str
+    if mem_display >= 1024 then
+      mem_str = string.format("%.2f MB", mem_display / 1024)
+    else
+      mem_str = string.format("%.0f KB", mem_display)
+    end
+    table.insert(lines, string.format("  Resources: %.3fs, %s", time_display, mem_str))
+    if data.problem and data.problem ~= "?" then
+      table.insert(lines, "  Problem:   " .. data.problem)
+    end
+    if data.language and data.language ~= "?" then
+      table.insert(lines, "  Language:  " .. data.language)
+    end
+
     table.insert(lines, "")
     table.insert(lines, "  " .. sep)
     table.insert(lines, "")
-  end
 
-  -- Execution Results header
-  table.insert(lines, "  Execution Results")
-  local exec_row = #lines - 1
-  table.insert(hl_lines, { exec_row, "@markup.heading", 0, -1 })
-  table.insert(lines, "")
-
-  -- Visual summary bar (like DMOJ's checkmarks/crosses row)
-  if num_cases > 0 then
-    local icons = "  "
-    for _, c in ipairs(data.cases) do
-      if c.status == "AC" then
-        icons = icons .. "✓ "
-      else
-        icons = icons .. "✗ "
-      end
-    end
-    local icon_row = #lines
-    table.insert(lines, icons)
-    -- Highlight each icon individually
-    local col = 2
-    for _, c in ipairs(data.cases) do
-      local hl = verdict_hl(c.status)
-      -- Each icon is a multi-byte char + space (icon is typically 3 bytes in UTF-8)
-      local icon_char = c.status == "AC" and "✓" or "✗"
-      local byte_len = #icon_char
-      table.insert(hl_lines, { icon_row, hl, col, col + byte_len })
-      col = col + byte_len + 1 -- +1 for the space
-    end
+    -- Execution Results header
+    table.insert(lines, "  Execution Results")
+    local exec_row = #lines - 1
+    table.insert(hl_lines, { exec_row, "@markup.heading", 0, -1 })
     table.insert(lines, "")
-  end
 
-  -- Per-case results
-  if num_cases > 0 then
-    for _, c in ipairs(data.cases) do
-      if c.type == "case" then
-        local status_str = c.status or "?"
-        if c.extra and c.extra ~= "" then
-          status_str = status_str .. " " .. c.extra
-        end
-        local detail_parts = {}
-        if c.time and c.time > 0 then
-          table.insert(detail_parts, string.format("%.3fs", c.time))
-        end
-        if c.memory and c.memory > 0 then
-          if c.memory >= 1024 then
-            table.insert(detail_parts, string.format("%.2f MB", c.memory / 1024))
-          else
-            table.insert(detail_parts, string.format("%.0f KB", c.memory))
+    -- Visual summary bar (like DMOJ's checkmarks/crosses row)
+    if num_cases > 0 then
+      local icons = "  "
+      local icon_row = #lines
+      table.insert(lines, icons)
+      -- Highlight each icon individually
+      local col = 2
+      for _, c in ipairs(data.cases) do
+        local hl = verdict_hl(c.status)
+        -- Each icon is a multi-byte char + space (icon is typically 3 bytes in UTF-8)
+        local icon_char = c.status == "AC" and "✓" or "✗"
+        local byte_len = #icon_char
+        table.insert(hl_lines, { icon_row, hl, col, col + byte_len })
+        col = col + byte_len + 1 -- +1 for the space
+      end
+      table.insert(lines, "")
+    end
+
+    -- Per-case results
+    if num_cases > 0 then
+      for _, c in ipairs(data.cases) do
+        if c.type == "case" then
+          local status_str = c.status or "?"
+          if c.extra and c.extra ~= "" then
+            status_str = status_str .. " " .. c.extra
           end
-        end
-        local detail_str = ""
-        if #detail_parts > 0 then
-          detail_str = " [" .. table.concat(detail_parts, ",") .. "]"
-        end
-        local pts_str = ""
-        if c.total and c.total > 0 then
-          pts_str = string.format(" (%.0f/%.0f)", c.points or 0, c.total)
-        end
+          local detail_parts = {}
+          if c.time and c.time > 0 then
+            table.insert(detail_parts, string.format("%.3fs", c.time))
+          end
+          if c.memory and c.memory > 0 then
+            if c.memory >= 1024 then
+              table.insert(detail_parts, string.format("%.2f MB", c.memory / 1024))
+            else
+              table.insert(detail_parts, string.format("%.0f KB", c.memory))
+            end
+          end
+          local detail_str = ""
+          if #detail_parts > 0 then
+            detail_str = " [" .. table.concat(detail_parts, ",") .. "]"
+          end
+          local pts_str = ""
+          if c.total and c.total > 0 then
+            pts_str = string.format(" (%.0f/%.0f)", c.points or 0, c.total)
+          end
 
-        local case_label = string.format("  Test case #%-3d", c.case_id or 0)
-        local case_line = case_label .. "  " .. status_str .. detail_str .. pts_str
-        local case_row = #lines
-        table.insert(lines, case_line)
-        -- Highlight the status portion
-        local status_start = #case_label + 2
-        local status_end = status_start + #(c.status or "?")
-        table.insert(hl_lines, { case_row, verdict_hl(c.status), status_start, status_end })
-      elseif c.type == "batch" then
-        local batch_row = #lines
-        table.insert(lines, string.format(
-          "  Batch %-3s  [%.1f/%.1f]",
-          tostring(c.batch_id or "?"),
-          c.points or 0,
-          c.total or 0
-        ))
-        table.insert(hl_lines, { batch_row, "@markup.heading", 0, -1 })
-        if c.cases then
-          for _, bc in ipairs(c.cases) do
-            local bc_status = bc.status or "?"
-            local bc_label = string.format("    Case %-4s", tostring(bc.case_id or "?"))
-            local bc_line = bc_label .. "  " .. bc_status
-            if bc.time and bc.time > 0 then
-              bc_line = bc_line .. string.format("  %.3fs", bc.time)
+          local case_label = string.format("  Test case #%-3d", c.case_id or 0)
+          local case_line = case_label .. "  " .. status_str .. detail_str .. pts_str
+          local case_row = #lines
+          table.insert(lines, case_line)
+          -- Highlight the status portion
+          local status_start = #case_label + 2
+          local status_end = status_start + #(c.status or "?")
+          table.insert(hl_lines, { case_row, verdict_hl(c.status), status_start, status_end })
+        elseif c.type == "batch" then
+          local batch_row = #lines
+          table.insert(lines, string.format(
+            "  Batch %-3s  [%.1f/%.1f]",
+            tostring(c.batch_id or "?"),
+            c.points or 0,
+            c.total or 0
+          ))
+          table.insert(hl_lines, { batch_row, "@markup.heading", 0, -1 })
+          if c.cases then
+            for _, bc in ipairs(c.cases) do
+              local bc_status = bc.status or "?"
+              local bc_label = string.format("    Case %-4s", tostring(bc.case_id or "?"))
+              local bc_line = bc_label .. "  " .. bc_status
+              local bc_row = #lines
+              table.insert(lines, bc_line)
+              local bc_s = #bc_label + 2
+              table.insert(hl_lines, { bc_row, verdict_hl(bc_status), bc_s, bc_s + #bc_status })
             end
-            if bc.total and bc.total > 0 then
-              bc_line = bc_line .. string.format("  (%.0f/%.0f)", bc.points or 0, bc.total)
-            end
-            local bc_row = #lines
-            table.insert(lines, bc_line)
-            local bc_s = #bc_label + 2
-            table.insert(hl_lines, { bc_row, verdict_hl(bc_status), bc_s, bc_s + #bc_status })
           end
         end
       end
-    end
-  else
-    table.insert(lines, "  (No case details available)")
-    if data._scraped then
-      table.insert(lines, "  Open in browser for full details.")
+    else
+      table.insert(lines, "  (No case details available)")
+      if data._scraped then
+        table.insert(lines, "  Open in browser for full details.")
+      end
     end
   end
 
@@ -942,7 +934,9 @@ function M.show_result(data, is_processing)
   local popup_height = math.min(#lines + 2, math.floor(vim.o.lines * 0.75))
 
   -- Color the border based on result (like leetcode.nvim)
-  local border_hl = is_accepted and "DiagnosticOk" or "DiagnosticError"
+  local border_hl = "DiagnosticError"
+  if is_accepted then border_hl = "DiagnosticOk" end
+  if result == "CE" then border_hl = "DiagnosticError" end
   local title_str = is_accepted
     and (" ✓ " .. verdict_label(result) .. " ")
     or (" ✗ " .. verdict_label(result) .. " ")

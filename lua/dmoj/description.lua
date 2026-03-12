@@ -523,10 +523,11 @@ function M.show(code, meta)
     local lines = {}
     local title = meta.name or code
 
-    table.insert(lines, sep)
-    table.insert(lines, center(title))
-    table.insert(lines, sep)
     table.insert(lines, "")
+    table.insert(lines, center(url))
+    table.insert(lines, "")
+    table.insert(lines, "")
+    table.insert(lines, center(title))
 
     -- One-line stats
     local stats = {}
@@ -536,10 +537,10 @@ function M.show(code, meta)
     if meta.group and meta.group ~= "" then
       table.insert(stats, meta.group)
     end
-    local stats_line = table.concat(stats, "  |  ")
+    local stats_line = table.concat(stats, " | ")
     table.insert(lines, center(stats_line))
     table.insert(lines, "")
-    table.insert(lines, center(url))
+    table.insert(lines, sep)
     table.insert(lines, "")
 
     local header_end = #lines
