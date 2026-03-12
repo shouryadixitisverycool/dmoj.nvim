@@ -226,9 +226,13 @@ local function html_to_lines(html)
     code = code:gsub("&quot;", '"')
     code = code:gsub("&#39;", "'")
     code = code:gsub("&nbsp;", " ")
-    -- Trim leading/trailing newlines from code content
     code = code:gsub("^%s*\n", ""):gsub("\n%s*$", "")
-    return "\n```\n" .. code .. "\n```\n"
+    
+    local lines = {}
+    for line in vim.gsplit(code, "\n") do
+      table.insert(lines, "    " .. line)
+    end
+    return "\n<dmoj-code>\n" .. table.concat(lines, "\n") .. "\n</dmoj-code>\n"
   end)
   -- <pre> without <code>
   text = text:gsub("<pre[^>]*>(.-)</pre>", function(code)
@@ -240,7 +244,12 @@ local function html_to_lines(html)
     code = code:gsub("&#39;", "'")
     code = code:gsub("&nbsp;", " ")
     code = code:gsub("^%s*\n", ""):gsub("\n%s*$", "")
-    return "\n```\n" .. code .. "\n```\n"
+    
+    local lines = {}
+    for line in vim.gsplit(code, "\n") do
+      table.insert(lines, "    " .. line)
+    end
+    return "\n<dmoj-code>\n" .. table.concat(lines, "\n") .. "\n</dmoj-code>\n"
   end)
 
   -- Inline code (handle <code> with attributes)
@@ -409,8 +418,23 @@ local function html_to_lines(html)
 
   -- Split into lines
   local lines = {}
+  local in_code = false
   for line in text:gmatch("([^\n]*)\n?") do
-    table.insert(lines, line)
+    if line == "<dmoj-code>" then
+      in_code = true
+      table.insert(lines, "")
+    elseif line == "</dmoj-code>" then
+      in_code = false
+      table.insert(lines, "")
+    else
+      -- Strip heading markers, but keep track of them for highlighting
+      local h_line, matches = line:gsub("<dmoj%-heading>(.-)</dmoj%-heading>", "%1")
+      if matches > 0 then
+        table.insert(lines, h_line)
+      else
+        table.insert(lines, line)
+      end
+    end
   end
 
   return lines
@@ -428,24 +452,52 @@ local function apply_highlights(bufnr, header_end)
   for i, line in ipairs(buf_lines) do
     local row = i - 1
 
-    -- Separator lines (═ and ─)
-    if line:match("^%s*[═]+%s*$") then
-      vim.api.nvim_buf_add_highlight(bufnr, ns, "FloatBorder", row, 0, -1)
-
-    elseif line:match("^%s*[─]+%s*$") then
-      vim.api.nvim_buf_add_highlight(bufnr, ns, "FloatBorder", row, 0, -1)
-
-    -- URL line (contains https://)
-    elseif line:match("https?://") and row < header_end then
+    -- URL is row 1
+    if row == 1 then
       vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", row, 0, -1)
-
-    -- Stats line (contains | separator) in header
-    elseif line:find("|") and row < header_end then
+    -- Title is row 4
+    elseif row == 4 then
+      vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", row, 0, -1)
+    -- Stats is row 5
+    elseif row == 5 then
       vim.api.nvim_buf_add_highlight(bufnr, ns, "Special", row, 0, -1)
-
-    -- Markdown headings (#### ...)
-    elseif line:match("^#+%s") then
+      
+    -- Custom headings (Starts with Icon then space then text, matched via our prefix)
+    -- " 💡 Example 1:" or "   Constraints:" etc.
+    elseif line:match("^ %s*💡") or line:match("^ %s*") or line:match("^ %s*") or line:match("^ %s*📝") then
       vim.api.nvim_buf_add_highlight(bufnr, ns, "@markup.heading", row, 0, -1)
+      
+    -- Indented code blocks (4 spaces)
+    elseif line:match("^    ") and row > header_end then
+      vim.api.nvim_buf_add_highlight(bufnr, ns, "String", row, 0, -1)
+      
+    -- Tables (starts with |)
+    elseif line:match("^%s*|") and row > header_end then
+      -- Highlight the table separators and text like Leetcode
+      -- For simplicity, let's just highlight the whole table row in a nice color
+      -- or just the pipes
+      local pipe_s = 0
+      while true do
+        local next_pipe = line:find("|", pipe_s + 1, true)
+        if not next_pipe then break end
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "FloatBorder", row, next_pipe - 1, next_pipe)
+        pipe_s = next_pipe
+      end
+      -- If it's a separator row like |---|---|
+      if line:match("|%-") then
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "FloatBorder", row, 0, -1)
+      else
+        -- Highlight the text inside the row
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Identifier", row, 0, -1)
+        -- Redo pipes over it so they stay border colored
+        pipe_s = 0
+        while true do
+          local next_pipe = line:find("|", pipe_s + 1, true)
+          if not next_pipe then break end
+          vim.api.nvim_buf_add_highlight(bufnr, ns, "FloatBorder", row, next_pipe - 1, next_pipe)
+          pipe_s = next_pipe
+        end
+      end
 
     -- Bullet points
     elseif line:match("^%s+%*%s") then
@@ -457,22 +509,6 @@ local function apply_highlights(bufnr, header_end)
     -- Footer line
     elseif line:find("%[o%]") and line:find("%[q%]") then
       vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", row, 0, -1)
-
-    -- Code fence
-    elseif line:match("^```") then
-      vim.api.nvim_buf_add_highlight(bufnr, ns, "Delimiter", row, 0, -1)
-    end
-  end
-
-  -- Find and highlight the title line (first non-empty, non-separator line after first separator)
-  local found_first_sep = false
-  for i, line in ipairs(buf_lines) do
-    local row = i - 1
-    if line:match("^%s*[═]+%s*$") then
-      found_first_sep = true
-    elseif found_first_sep and vim.trim(line) ~= "" then
-      vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", row, 0, -1)
-      break
     end
   end
 end
@@ -508,14 +544,13 @@ function M.show(code, meta)
 
     -- Calculate split width for centering
     local split_width = math.floor(vim.o.columns * 0.4)
-    local sep_width = math.min(split_width - 4, 60)
-    local sep = string.rep("═", sep_width)
-    local thin_sep = string.rep("─", sep_width)
+    local text_width = split_width - 4
+    local thin_sep = string.rep("─", text_width)
 
-    -- Center text within split (use strdisplaywidth for proper Unicode/multibyte width)
+    -- Center text within split
     local function center(s)
       local display_width = vim.fn.strdisplaywidth(s)
-      local pad = math.max(0, math.floor((sep_width - display_width) / 2))
+      local pad = math.max(0, math.floor((text_width - display_width) / 2))
       return string.rep(" ", pad) .. s
     end
 
@@ -540,12 +575,9 @@ function M.show(code, meta)
     local stats_line = table.concat(stats, " | ")
     table.insert(lines, center(stats_line))
     table.insert(lines, "")
-    table.insert(lines, sep)
-    table.insert(lines, "")
 
     local header_end = #lines
 
-    table.insert(lines, thin_sep)
     table.insert(lines, "")
 
     -- Parse and append description
