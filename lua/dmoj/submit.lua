@@ -413,90 +413,46 @@ end
 --- Returns a list of case tables, or empty table if none found.
 ---@param body string HTML body
 ---@return table[] cases
-local function scrape_test_cases(body)
+local function scrape_test_cases(plain)
   local cases = {}
 
-  -- DMOJ format: "Test case #N:  VERDICT [TIMEs,MEMORY MB] (pts/total)"
-  -- Example: "Test case #1:   AC [0.007s,1.20 MB] (10/10)"
-  -- Example: "Test case #1:   WA [0.009s,1.21 MB] (0/10)"
-  for case_id, status, time_s, mem, pts, total in
-    body:gmatch('Test case #(%d+):%s*<[^>]*>%s*([A-Z]+)%s*</[^>]*>%s*%[([%d%.]+)s,([%d%.]+) MB%]%s*%(([%d%.]+)/([%d%.]+)%)')
+  for case_id, status, time_s, mem, unit, pts, total in
+    plain:gmatch('Test case #(%d+):%s*([A-Za-z]+)%s*%[([%d%.]+)s,%s*([%d%.]+)%s*(%wB)%]%s*%(([%d%.]+)/([%d%.]+)%)')
   do
     table.insert(cases, {
       type = "case",
       case_id = tonumber(case_id) or 0,
-      status = vim.trim(status),
+      status = vim.trim(status):upper(),
       time = tonumber(time_s) or 0,
-      memory = (tonumber(mem) or 0) * 1024, -- convert MB to KB
+      memory = unit:upper() == "MB" and ((tonumber(mem) or 0) * 1024) or (tonumber(mem) or 0),
       points = tonumber(pts) or 0,
       total = tonumber(total) or 0,
     })
   end
 
-  -- Fallback: try without the <span> tags (plain text rendering)
   if #cases == 0 then
-    for case_id, status, time_s, mem, pts, total in
-      body:gmatch('Test case #(%d+):%s+([A-Z]+)%s+%[([%d%.]+)s,([%d%.]+) MB%]%s+%(([%d%.]+)/([%d%.]+)%)')
+    for case_id, status in plain:gmatch('Test case #(%d+):%s*([A-Za-z]+)') do
+      table.insert(cases, {
+        type = "case",
+        case_id = tonumber(case_id) or 0,
+        status = vim.trim(status):upper(),
+        time = 0, memory = 0, points = 0, total = 0
+      })
+    end
+  end
+
+  if #cases == 0 then
+    for case_id, status, time_s, mem, unit, pts, total in
+      plain:gmatch('Case #(%d+):%s*([A-Za-z]+)%s*%[([%d%.]+)s,%s*([%d%.]+)%s*(%wB)%]%s*%(([%d%.]+)/([%d%.]+)%)')
     do
       table.insert(cases, {
         type = "case",
         case_id = tonumber(case_id) or 0,
-        status = vim.trim(status),
+        status = vim.trim(status):upper(),
         time = tonumber(time_s) or 0,
-        memory = (tonumber(mem) or 0) * 1024,
+        memory = unit:upper() == "MB" and ((tonumber(mem) or 0) * 1024) or (tonumber(mem) or 0),
         points = tonumber(pts) or 0,
         total = tonumber(total) or 0,
-      })
-    end
-  end
-
-  -- Fallback: try KB format instead of MB
-  if #cases == 0 then
-    for case_id, status, time_s, mem, pts, total in
-      body:gmatch('Test case #(%d+):%s*<[^>]*>%s*([A-Z]+)%s*</[^>]*>%s*%[([%d%.]+)s,([%d%.]+) KB%]%s*%(([%d%.]+)/([%d%.]+)%)')
-    do
-      table.insert(cases, {
-        type = "case",
-        case_id = tonumber(case_id) or 0,
-        status = vim.trim(status),
-        time = tonumber(time_s) or 0,
-        memory = tonumber(mem) or 0,
-        points = tonumber(pts) or 0,
-        total = tonumber(total) or 0,
-      })
-    end
-  end
-
-  -- Fallback: broader pattern - just verdict + case number
-  if #cases == 0 then
-    for case_id, status in
-      body:gmatch('Test case #(%d+):%s*<[^>]*>%s*([A-Z]+)%s*</[^>]*>')
-    do
-      table.insert(cases, {
-        type = "case",
-        case_id = tonumber(case_id) or 0,
-        status = vim.trim(status),
-        time = 0,
-        memory = 0,
-        points = 0,
-        total = 0,
-      })
-    end
-  end
-
-  -- Fallback: old pattern (Case #N format)
-  if #cases == 0 then
-    for case_id, case_status, case_time, case_mem, case_pts, case_total_pts in
-      body:gmatch('Case%s*#?(%d+).-<[^>]*>%s*([A-Z]+)%s*<.-([%d%.]+)%s*s.-([%d%.]+)%s*KB.-([%d%.]+)/([%d%.]+)')
-    do
-      table.insert(cases, {
-        type = "case",
-        case_id = tonumber(case_id) or 0,
-        status = case_status,
-        time = tonumber(case_time) or 0,
-        memory = tonumber(case_mem) or 0,
-        points = tonumber(case_pts) or 0,
-        total = tonumber(case_total_pts) or 0,
       })
     end
   end
@@ -521,29 +477,33 @@ local function scrape_submission_details(submission_id, data, callback)
 
     local body = resp.body
 
+    local plain = body:gsub("<[^>]+>", "")
+
     -- Scrape test cases
-    local cases = scrape_test_cases(body)
+    local cases = scrape_test_cases(plain)
     if #cases > 0 then
       data.cases = cases
     end
 
     -- Try to get better resource info from the page
     -- "Resources: 0.234s, 2.03 MB"
-    local res_time, res_mem = body:match("Resources:%s*([%d%.]+)s,%s*([%d%.]+) MB")
+    local res_time, res_mem, res_unit = plain:match("Resources:%s*([%d%.]+)s,%s*([%d%.]+)%s*(%wB)")
     if res_time then
       data.time = tonumber(res_time) or data.time
-      data.memory = ((tonumber(res_mem) or 0) * 1024)
+      local m = tonumber(res_mem) or 0
+      if res_unit and res_unit:upper() == "MB" then m = m * 1024 end
+      data.memory = m > 0 and m or data.memory
     end
 
     -- "Final score: 100/100 (100.0/100 points)"
-    local score_got, score_total = body:match("Final score:%s*(%d+)/(%d+)")
+    local score_got, score_total = plain:match("Final score:%s*([%d%.]+)/([%d%.]+)")
     if score_got and score_total then
       data.case_points = tonumber(score_got) or data.case_points
       data.case_total = tonumber(score_total) or data.case_total
     end
     -- Also try the "(X.X/Y points)" format
     if not score_got then
-      local pts, tot = body:match("%(([%d%.]+)/([%d%.]+) points?%)")
+      local pts, tot = plain:match("%(([%d%.]+)/([%d%.]+) points?%)")
       if pts then
         data.case_points = tonumber(pts) or data.case_points
         data.case_total = tonumber(tot) or data.case_total
@@ -551,7 +511,7 @@ local function scrape_submission_details(submission_id, data, callback)
     end
 
     -- Extract problem name
-    local problem = body:match('Submission of%s*<a[^>]*>([^<]+)</a>')
+    local problem = plain:match('Submission of%s*(.-)%s*by')
     if problem then
       data.problem = vim.trim(problem)
     end
@@ -675,40 +635,44 @@ function M.poll_result_scrape(submission_id, attempt)
       result = "??"
     end
 
+    local plain = body:gsub("<[^>]+>", "")
+
     -- Extract resource info
     local time_val = 0
     local mem_val = 0
-    local res_time, res_mem = body:match("Resources:%s*([%d%.]+)s,%s*([%d%.]+) MB")
+    local res_time, res_mem, res_unit = plain:match("Resources:%s*([%d%.]+)s,%s*([%d%.]+)%s*(%wB)")
     if res_time then
       time_val = tonumber(res_time) or 0
-      mem_val = (tonumber(res_mem) or 0) * 1024
+      local m = tonumber(res_mem) or 0
+      if res_unit and res_unit:upper() == "MB" then m = m * 1024 end
+      mem_val = m
     else
-      time_val = tonumber(body:match("([%d%.]+)%s*s")) or 0
-      mem_val = tonumber(body:match("([%d%.]+)%s*KB")) or 0
+      time_val = tonumber(plain:match("([%d%.]+)%s*s")) or 0
+      mem_val = tonumber(plain:match("([%d%.]+)%s*KB")) or 0
     end
 
     -- Extract points
     local points = 0
     local total = 0
-    local score_got, score_total = body:match("Final score:%s*(%d+)/(%d+)")
+    local score_got, score_total = plain:match("Final score:%s*([%d%.]+)/([%d%.]+)")
     if score_got then
       points = tonumber(score_got) or 0
       total = tonumber(score_total) or 0
     else
-      local pts, tot = body:match("%(([%d%.]+)/([%d%.]+) points?%)")
+      local pts, tot = plain:match("%(([%d%.]+)/([%d%.]+) points?%)")
       if pts then
         points = tonumber(pts) or 0
         total = tonumber(tot) or 0
       else
-        points = tonumber(body:match("([%d%.]+)%s*/[%d%.]+%s*points?")) or 0
-        total = tonumber(body:match("[%d%.]+%s*/(%s*[%d%.]+)%s*points?")) or 0
+        points = tonumber(plain:match("([%d%.]+)%s*/[%d%.]+%s*points?")) or 0
+        total = tonumber(plain:match("[%d%.]+%s*/(%s*[%d%.]+)%s*points?")) or 0
       end
     end
 
-    local problem = body:match('Submission of%s*<a[^>]*>([^<]+)</a>') or "?"
+    local problem = plain:match('Submission of%s*(.-)%s*by') or "?"
 
     -- Scrape test cases
-    local cases = scrape_test_cases(body)
+    local cases = scrape_test_cases(plain)
 
     -- Build a result data table compatible with show_result
     local data = {
