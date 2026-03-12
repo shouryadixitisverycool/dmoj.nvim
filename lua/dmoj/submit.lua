@@ -414,15 +414,21 @@ end
 ---@param body string HTML body
 ---@return table[] cases
 local function scrape_test_cases(plain)
+  -- Convert HTML entities just in case (e.g., &nbsp;)
+  plain = plain:gsub("&nbsp;", " "):gsub("p", " ")
+
   local cases = {}
 
-  for case_id, status, time_s, mem, unit, pts, total in
-    plain:gmatch('Test case #(%d+):%s*([A-Za-z]+)%s*%[([%d%.]+)s,%s*([%d%.]+)%s*(%wB)%]%s*%(([%d%.]+)/([%d%.]+)%)')
+  for case_id, status_raw, time_s, mem, unit, pts, total in
+    plain:gmatch('#(%d+):%s*(.-)%s*%[%s*([%d%.]+)%s*s,%s*([%d%.]+)%s*(%wB)%s*%]%s*%(([%d%.]+)/([%d%.]+)%)')
   do
+    local status = status_raw:match("^%s*(%S+)") or status_raw
+    local extra = status_raw:match("^%s*%S+%s+(.*)$") or ""
     table.insert(cases, {
       type = "case",
       case_id = tonumber(case_id) or 0,
       status = vim.trim(status):upper(),
+      extra = vim.trim(extra),
       time = tonumber(time_s) or 0,
       memory = unit:upper() == "MB" and ((tonumber(mem) or 0) * 1024) or (tonumber(mem) or 0),
       points = tonumber(pts) or 0,
@@ -431,28 +437,14 @@ local function scrape_test_cases(plain)
   end
 
   if #cases == 0 then
-    for case_id, status in plain:gmatch('Test case #(%d+):%s*([A-Za-z]+)') do
+    -- fallback for cases with no resources (like CE, IR)
+    for case_id, status_raw in plain:gmatch('#(%d+):%s*([A-Za-z]+)') do
       table.insert(cases, {
         type = "case",
         case_id = tonumber(case_id) or 0,
-        status = vim.trim(status):upper(),
+        status = vim.trim(status_raw):upper(),
+        extra = "",
         time = 0, memory = 0, points = 0, total = 0
-      })
-    end
-  end
-
-  if #cases == 0 then
-    for case_id, status, time_s, mem, unit, pts, total in
-      plain:gmatch('Case #(%d+):%s*([A-Za-z]+)%s*%[([%d%.]+)s,%s*([%d%.]+)%s*(%wB)%]%s*%(([%d%.]+)/([%d%.]+)%)')
-    do
-      table.insert(cases, {
-        type = "case",
-        case_id = tonumber(case_id) or 0,
-        status = vim.trim(status):upper(),
-        time = tonumber(time_s) or 0,
-        memory = unit:upper() == "MB" and ((tonumber(mem) or 0) * 1024) or (tonumber(mem) or 0),
-        points = tonumber(pts) or 0,
-        total = tonumber(total) or 0,
       })
     end
   end
@@ -702,8 +694,6 @@ end
 local function verdict_hl(verdict)
   if verdict == "AC" then return "DiagnosticOk"
   elseif verdict == "WA" then return "DiagnosticError"
-  elseif verdict == "TLE" or verdict == "MLE" or verdict == "RTE" or verdict == "OLE" then return "DiagnosticError"
-  elseif verdict == "CE" or verdict == "IE" or verdict == "IR" then return "DiagnosticError"
   end
   return "DiagnosticWarn"
 end
@@ -829,7 +819,7 @@ function M.show_result(data)
     -- Highlight each icon individually
     local col = 2
     for _, c in ipairs(data.cases) do
-      local hl = c.status == "AC" and "DiagnosticOk" or "DiagnosticError"
+      local hl = verdict_hl(c.status)
       -- Each icon is a multi-byte char + space (icon is typically 3 bytes in UTF-8)
       local icon_char = c.status == "AC" and "✓" or "✗"
       local byte_len = #icon_char
@@ -844,6 +834,9 @@ function M.show_result(data)
     for _, c in ipairs(data.cases) do
       if c.type == "case" then
         local status_str = c.status or "?"
+        if c.extra and c.extra ~= "" then
+          status_str = status_str .. " " .. c.extra
+        end
         local detail_parts = {}
         if c.time and c.time > 0 then
           table.insert(detail_parts, string.format("%.3fs", c.time))
@@ -870,8 +863,8 @@ function M.show_result(data)
         table.insert(lines, case_line)
         -- Highlight the status portion
         local status_start = #case_label + 2
-        local status_end = status_start + #status_str
-        table.insert(hl_lines, { case_row, verdict_hl(status_str), status_start, status_end })
+        local status_end = status_start + #(c.status or "?")
+        table.insert(hl_lines, { case_row, verdict_hl(c.status), status_start, status_end })
       elseif c.type == "batch" then
         local batch_row = #lines
         table.insert(lines, string.format(

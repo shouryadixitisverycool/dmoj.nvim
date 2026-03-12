@@ -116,11 +116,9 @@ function M.open(opts)
       table.insert(lines, line)
 
       -- Color the result column
-      local hl = "Normal"
+      local hl = "DiagnosticWarn"
       if s.result == "AC" then hl = "DiagnosticOk"
       elseif s.result == "WA" then hl = "DiagnosticError"
-      elseif s.result == "TLE" or s.result == "MLE" or s.result == "RTE" then hl = "DiagnosticError"
-      elseif s.result == "CE" or s.result == "IE" then hl = "DiagnosticError"
       end
       table.insert(hl_data, { row, hl, 10, 16 })
     end
