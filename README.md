@@ -4,6 +4,26 @@ A Neovim plugin for solving [DMOJ](https://dmoj.ca) problems without leaving you
 
 Works with [dmoj.ca](https://dmoj.ca) and any self-hosted DMOJ instance (e.g. a college OJ).
 
+## Table of Contents
+
+- [Features](#features)
+- [Compatibility](#compatibility)
+- [Gallery](#gallery)
+- [Installation](#installation)
+- [Authentication](#authentication)
+- [Configuration](#configuration)
+- [Commands](#commands)
+- [Dashboard](#dashboard)
+- [Problem Picker](#problem-picker)
+- [Contest Browser](#contest-browser)
+- [Opening a Problem](#opening-a-problem)
+- [Submitting](#submitting)
+- [Local Testing](#local-testing)
+- [Security](#security)
+- [Private / Organization DMOJ Instances](#private--organization-dmoj-instances)
+- [File Structure](#file-structure)
+- [Troubleshooting](#troubleshooting)
+
 ## Features
 
 - **Dashboard** home screen with ASCII art and quick-access menu
@@ -26,13 +46,41 @@ Works with [dmoj.ca](https://dmoj.ca) and any self-hosted DMOJ instance (e.g. a 
 
 Requires **Neovim >= 0.9** and **curl** (pre-installed on macOS and most Linux distros).
 
+## Gallery
+
+**Dashboard**
+
+![Dashboard](https://github.com/user-attachments/assets/placeholder-dashboard)
+
+**Problem picker (Telescope)**
+
+![Problem Picker](https://github.com/user-attachments/assets/placeholder-picker)
+
+**Problem description + solution split**
+
+![Problem Description](https://github.com/user-attachments/assets/placeholder-description)
+
+**Submission verdict**
+
+![Submission Verdict](https://github.com/user-attachments/assets/placeholder-verdict)
+
+**Contest browser**
+
+![Contest Browser](https://github.com/user-attachments/assets/placeholder-contests)
+
+**Local test runner**
+
+![Local Runner](https://github.com/user-attachments/assets/placeholder-runner)
+
+> Screenshots are from dmoj.ca. Replace the placeholder image links above with actual screenshots once you've uploaded them to GitHub (drag-and-drop into any GitHub issue to get a link).
+
 ## Installation
 
 ### lazy.nvim
 
 ```lua
 {
-  "sdixit13/dmoj.nvim",
+  "your-username/dmoj.nvim",
   lazy = false,
   dependencies = {
     "nvim-telescope/telescope.nvim", -- optional but strongly recommended
@@ -53,7 +101,7 @@ For optimal lazy-loading, only load the plugin eagerly when the launch arg match
 
 ```lua
 {
-  "sdixit13/dmoj.nvim",
+  "your-username/dmoj.nvim",
   lazy = "dmoj.nvim" ~= vim.fn.argv(0, -1),
   dependencies = {
     "nvim-telescope/telescope.nvim",
@@ -68,7 +116,7 @@ For a self-hosted DMOJ instance (e.g. a college OJ):
 
 ```lua
 {
-  "sdixit13/dmoj.nvim",
+  "your-username/dmoj.nvim",
   lazy = false,
   dependencies = {
     "nvim-telescope/telescope.nvim",
@@ -194,31 +242,11 @@ The local runner only requires the compiler/interpreter to be on your `PATH`. Th
 ## Dashboard
 
 Opened with `:Dmoj menu` or `nvim dmoj.nvim`.
-
-```
-     /$$$$$$$  /$$      /$$  /$$$$$$     /$$$$$$
-    | $$__  $$| $$$    /$$$ /$$__  $$   |_  $$_/
-    | $$  \ $$| $$$$  /$$$$| $$  \ $$     | $$
-    | $$  | $$| $$ $$/$$ $$| $$  | $$     | $$
-    | $$  | $$| $$  $$$| $$| $$  | $$     | $$
-    | $$  | $$| $$\  $ | $$| $$  | $$ /$$ | $$
-    | $$$$$$$/| $$ \/  | $$|  $$$$$$/| $$$$$$/
-    |_______/ |__/     |__/ \______/  \______/
-
-                https://dmoj.ca
-
-  [l]  Problems               Browse and search problems
-  [c]  Contests               Browse and join contests
-  [s]  Submit                  Submit current buffer
-  [i]  Login                   Paste session cookie
-  [w]  Who Am I                Check login status
-  [o]  Open in Browser         Open OJ in browser
-  [q]  Quit                    Close dashboard
-```
-
+[image]
 ## Problem Picker
 
 Opened with `:Dmoj list` or `<leader>dl`.
+[image]
 
 Uses **Telescope** for fuzzy searching across problem code, title, and group. Falls back to a floating window picker if Telescope is not installed.
 
@@ -232,6 +260,7 @@ Uses **Telescope** for fuzzy searching across problem code, title, and group. Fa
 ## Contest Browser
 
 Opened with `:Dmoj contests` or `[c]` from the dashboard.
+[image]
 
 Lists all **active**, **upcoming**, and **past** contests. Uses Telescope for fuzzy search (with fallback float).
 
@@ -267,16 +296,6 @@ Lists all **active**, **upcoming**, and **past** contests. Uses Telescope for fu
 3. Create or open a solution file at `<storage_dir>/solutions/<code>.<ext>`
 4. Set buffer-local variables so `:Dmoj submit` and `:Dmoj run` know the problem and language
 
-Solution files are pre-filled with a language-appropriate comment header:
-
-```c
-// Problem: Disc Collection
-// https://dmoj.ca/problem/ds2
-// Language: CPP17
-// Time limit: 1.0s
-// Memory limit: 256 MB
-```
-
 ## Submitting
 
 Run `:Dmoj submit` (or `<leader>ds`) from your solution buffer.
@@ -287,42 +306,9 @@ Run `:Dmoj submit` (or `<leader>ds`) from your solution buffer.
 4. Polls the submission page every 1.5s until judging completes
 5. Displays the verdict in a floating window with per-case breakdown
 
-```
-┌─ ✓ Accepted ──────────────────────────────┐
-│                                            │
-│   Accepted  |  10/10 testcases passed      │
-│                                            │
-│   Score: 100/100  (100%)                   │
-│                                            │
-│   Resources: 0.085s, 1.58 MB               │
-│   Problem:   aplusb                        │
-│                                            │
-│   ──────────────────────────────────────   │
-│                                            │
-│   Execution Results                        │
-│                                            │
-│   ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓                     │
-│                                            │
-│   Test case #1    AC [0.007s, 1.20 MB]     │
-│   Test case #2    AC [0.008s, 1.22 MB]     │
-│   ...                                      │
-│                                            │
-│   ──────────────────────────────────────   │
-│   [q] Close  [o] Open in browser           │
-│                                            │
-└────────────────────────────────────────────┘
-```
-
+[image]
 Batched problems group cases under their batch header:
-
-```
-│   Batch 1    [5.0/5.0]                     │
-│     Case 1     AC [0.012s, 1.24 MB]        │
-│     Case 2     AC [0.015s, 1.26 MB]        │
-│   Batch 2    [5.0/5.0]                     │
-│     Case 3     AC [0.031s, 2.34 MB]        │
-```
-
+[image]
 ## Local Testing
 
 Run `:Dmoj run` (or `<leader>dt`) from your solution buffer.
@@ -335,9 +321,7 @@ Runs entirely locally — no submission is made to the judge.
 
 ## Security
 
-- **Credentials never appear in process arguments.** The session cookie, CSRF token, and form data are written to restricted temp files (`600`) and passed to `curl` via `--header @file` / `--data @file`, preventing exposure in `ps aux` on multi-user systems.
 - **Cookie file is created with `600` permissions** before any data is written, eliminating a brief window of world-readability.
-- **All requests use HTTPS.** No insecure (`-k`) curl flags are used.
 - **No credential logging.** The cookie value is never written to any Neovim buffer or log.
 
 ## Private / Organization DMOJ Instances
