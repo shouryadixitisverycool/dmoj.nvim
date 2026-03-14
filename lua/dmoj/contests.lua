@@ -146,6 +146,14 @@ function M.clear_cache()
   contests_cache = nil
 end
 
+--- Update just the current_key in the cache without re-fetching.
+---@param key string|nil the contest key that is now current, or nil if left
+function M._update_current_key(key)
+  if contests_cache then
+    contests_cache.current_key = key
+  end
+end
+
 --- Fetch contest list (with caching) then call callback.
 ---@param callback fun(contests: table[], current_key: string|nil)
 local function fetch_contests(callback)
@@ -429,19 +437,12 @@ local function parse_contest_detail(body, contest_key)
 
   if body:find(leave_pattern, 1, true) then
     meta.joined = true
-    -- Extract CSRF token from the leave form
-    local leave_form = body:match('<form action="[^"]*' .. contest_key .. '/leave"[^>]*>(.-)</form>')
-    if leave_form then
-      meta.csrf_token = leave_form:match('name="csrfmiddlewaretoken" value="([^"]+)"')
-    end
   elseif body:find(join_pattern, 1, true) then
     meta.joined = false
-    -- Extract CSRF token from the join form
-    local join_form = body:match('<form action="[^"]*' .. contest_key .. '/join"[^>]*>(.-)</form>')
-    if join_form then
-      meta.csrf_token = join_form:match('name="csrfmiddlewaretoken" value="([^"]+)"')
-    end
   end
+
+  -- Get CSRF token from cookie (same approach as submit.lua)
+  meta.csrf_token = auth.get_csrf_token()
 
   -- Duration info: <b>17 days 06:31</b> long starting on <b>February 25, 2026, 17:28 IST</b>
   local duration_block = body:match('<b>([^<]+)</b> long starting on <b>([^<]+)</b>')
@@ -692,11 +693,13 @@ function M._render_contest(contest_key, meta, url)
   -- Keymaps
   local kopts = { buffer = bufnr, nowait = true, silent = true }
 
-  -- q: close (delete buffer, go back)
+  -- q: close and return to dashboard
   vim.keymap.set("n", "q", function()
     if vim.api.nvim_buf_is_valid(bufnr) then
       pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
     end
+    -- Re-open the dashboard so the user doesn't land on a blank screen
+    require("dmoj.dashboard").open()
   end, kopts)
 
   -- o: open in browser
@@ -704,19 +707,31 @@ function M._render_contest(contest_key, meta, url)
     vim.fn.jobstart({ config.options.open_cmd, url }, { detach = true })
   end, kopts)
 
-  -- <CR>: join contest (only if not joined)
-  if not meta.joined and meta.csrf_token then
-    vim.keymap.set("n", "<CR>", function()
-      M._join_contest(contest_key, meta.csrf_token)
-    end, kopts)
-  end
+  -- <CR>: join contest (only shown if not joined)
+  vim.keymap.set("n", "<CR>", function()
+    if meta.joined then
+      ui.notify("Already joined this contest. Press Backspace to leave.", vim.log.levels.WARN)
+      return
+    end
+    if not meta.csrf_token then
+      ui.notify("Cannot join: no CSRF token in cookie. Try :Dmoj login", vim.log.levels.ERROR)
+      return
+    end
+    M._join_contest(contest_key, meta.csrf_token)
+  end, kopts)
 
-  -- <BS>: leave contest (only if joined)
-  if meta.joined and meta.csrf_token then
-    vim.keymap.set("n", "<BS>", function()
-      M._leave_contest(contest_key, meta.csrf_token)
-    end, kopts)
-  end
+  -- <BS>: leave contest (only shown if joined)
+  vim.keymap.set("n", "<BS>", function()
+    if not meta.joined then
+      ui.notify("Not in this contest. Press Enter to join.", vim.log.levels.WARN)
+      return
+    end
+    if not meta.csrf_token then
+      ui.notify("Cannot leave: no CSRF token in cookie. Try :Dmoj login", vim.log.levels.ERROR)
+      return
+    end
+    M._leave_contest(contest_key, meta.csrf_token)
+  end, kopts)
 end
 
 --- Join a contest by POSTing to /contest/CODE/join.
@@ -738,15 +753,15 @@ function M._join_contest(contest_key, csrf_token)
   http.post(post_url, {
     headers = headers,
     form = { csrfmiddlewaretoken = csrf_token },
-    follow_redirects = true,
     timeout = 30,
   }, function(resp)
     cancel()
 
-    if resp.status >= 200 and resp.status < 400 then
+    -- DMOJ responds with 302 redirect on successful join
+    if resp.status == 302 or resp.status == 301 or (resp.status >= 200 and resp.status < 300) then
       ui.notify("Joined contest: " .. contest_key, vim.log.levels.INFO)
-      -- Invalidate cache and refresh the detail view
-      M.clear_cache()
+      -- Update cached current_key immediately so picker reflects state
+      M._update_current_key(contest_key)
       M.show_contest(contest_key)
     else
       ui.notify("Failed to join contest: HTTP " .. resp.status, vim.log.levels.ERROR)
@@ -772,14 +787,15 @@ function M._leave_contest(contest_key, csrf_token)
   http.post(post_url, {
     headers = headers,
     form = { csrfmiddlewaretoken = csrf_token },
-    follow_redirects = true,
     timeout = 30,
   }, function(resp)
     cancel()
 
-    if resp.status >= 200 and resp.status < 400 then
+    -- DMOJ responds with 302 redirect on successful leave
+    if resp.status == 302 or resp.status == 301 or (resp.status >= 200 and resp.status < 300) then
       ui.notify("Left contest: " .. contest_key, vim.log.levels.INFO)
-      M.clear_cache()
+      -- Clear current_key immediately so picker reflects state
+      M._update_current_key(nil)
       M.show_contest(contest_key)
     else
       ui.notify("Failed to leave contest: HTTP " .. resp.status, vim.log.levels.ERROR)
