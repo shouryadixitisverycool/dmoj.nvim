@@ -291,7 +291,14 @@ function M.open()
 
   -- [q] Quit
   vim.keymap.set("n", "q", function()
-    vim.cmd("quit")
+    -- If this is the only window, quit the editor entirely.
+    -- Using :quit directly raises E5108 when called from a Lua keymap
+    -- in the last window, so we use :qa (or :wqa) instead.
+    if #vim.api.nvim_list_wins() <= 1 then
+      vim.cmd("qa")
+    else
+      vim.cmd("quit")
+    end
   end, kopts)
 
   -- Enter -> Problems
