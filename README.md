@@ -1,6 +1,10 @@
 <div align="center">
-    # ⚠️⚠️⚠️🚨🚨🚨 AI SLOP ALERT 🚨🚨🚨⚠️⚠️⚠️
-    the following project is 100% written by claude and probably contains a fuck ton of security flaws and non-functioning code. This was made mostly for personal use and hasn't been tested on any device other than mine (it works on my machine bro). Proceed with caution, you have been warned.
+<h1> ⚠️⚠️⚠️🚨🚨🚨 AI SLOP ALERT 🚨🚨🚨⚠️⚠️⚠️ </h1>
+    
+The following project is 100% written by claude and probably contains a fuck ton of security flaws and non-functioning code. This was made mostly for personal use and hasn't been tested on any device other than mine (it works on my machine bro). Proceed with caution, you have been warned.
+
+This project is heavily inspired (straight up plagiarism at this point) by [leetcode.nvim](https://github.com/kawre/leetcode.nvim)
+</div>
 
 <div align="center">
 
@@ -10,7 +14,7 @@ Solve [DMOJ] problems without leaving [Neovim]
 
 </div>
 
-<!-- demo video/gif here -->
+
 
 ## 📋 Table of Contents
 - [✨ Features](#-features)
@@ -261,3 +265,4 @@ Yes — set `base_url` in config. All data is scraped via cookie auth, no API ne
 [lazy.nvim]: https://github.com/folke/lazy.nvim
 [telescope.nvim]: https://github.com/nvim-telescope/telescope.nvim
 [leetcode.nvim]: https://github.com/kawre/leetcode.nvim
+
