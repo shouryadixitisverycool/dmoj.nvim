@@ -1,4 +1,8 @@
 <div align="center">
+    # ⚠️⚠️⚠️🚨🚨🚨 AI SLOP ALERT 🚨🚨🚨⚠️⚠️⚠️
+    the following project is 100% written by claude and probably contains a fuck ton of security flaws and non-functioning code. This was made mostly for personal use and hasn't been tested on any device other than mine (it works on my machine bro). Proceed with caution, you have been warned.
+
+<div align="center">
 
 # dmoj.nvim
 
