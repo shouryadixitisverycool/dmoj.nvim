@@ -294,7 +294,6 @@ function M.submit(opts)
         csrfmiddlewaretoken = csrf,
         language = tostring(lang_id),
         source = source,
-        judge = "",
       },
       timeout = 30,
     }, function(resp)
