@@ -4,6 +4,25 @@ local config = require("dmoj.config")
 local http = require("dmoj.http")
 local auth = require("dmoj.auth")
 
+--- Decode common HTML entities in scraped text.
+---@param s string
+---@return string
+local function decode_entities(s)
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&amp;", "&")
+  s = s:gsub("&quot;", '"')
+  s = s:gsub("&#39;", "'")
+  s = s:gsub("&nbsp;", " ")
+  s = s:gsub("\xc2\xa0", " ")
+  s = s:gsub("&#(%d+);", function(n)
+    local num = tonumber(n)
+    if num and num < 128 then return string.char(num) end
+    return ""
+  end)
+  return s
+end
+
 --- Fetch paginated problem list by scraping the /problems/ web page.
 ---@param opts? { page?: number, search?: string }
 ---@param callback fun(data: table|nil, err: string|nil)
@@ -58,7 +77,7 @@ function M.problems(opts, callback)
         end
         table.insert(objects, {
           code = vim.trim(code),
-          name = vim.trim(name),
+          name = decode_entities(vim.trim(name)),
           group = vim.trim(group),
           points = points,
           status = status,
@@ -129,7 +148,7 @@ function M.problem(code, callback)
     local body = resp.body
     local name = body:match('<h2[^>]*>%s*(.-)%s*</h2>') or code
     name = name:gsub("<[^>]+>", "")
-    name = vim.trim(name)
+    name = decode_entities(vim.trim(name))
 
     local time_limit = tonumber(body:match('[Tt]ime [Ll]imit:%s*([%d%.]+)')) or 2.0
     local memory_limit = tonumber(body:match('[Mm]emory [Ll]imit:%s*(%d+)')) or 262144
