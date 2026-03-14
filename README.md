@@ -14,7 +14,7 @@ Solve [DMOJ](https://dmoj.ca/) problems without leaving [Neovim]
 
 </div>
 
-
+https://github.com/user-attachments/assets/eb2aaa3e-d8fe-4dfb-ab20-f35d0c00e6fd
 
 ## 📋 Table of Contents
 - [✨ Features](#-features)
