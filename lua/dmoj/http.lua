@@ -10,6 +10,29 @@ local config = require("dmoj.config")
 ---@field body string
 ---@field headers table<string, string>
 
+--- URL-encode a string (percent-encode all non-unreserved characters).
+---@param s string
+---@return string
+local function url_encode(s)
+  return s:gsub("([^%w%-%.%_%~])", function(c)
+    return string.format("%%%02X", c:byte())
+  end)
+end
+
+--- Write content to a temp file and return its path, or nil on failure.
+---@param content string
+---@return string|nil path
+local function write_temp(content)
+  local path = vim.fn.tempname()
+  local f = io.open(path, "w")
+  if not f then return nil end
+  -- Restrict permissions immediately before writing sensitive data
+  vim.fn.setfperm(path, "rw-------")
+  f:write(content)
+  f:close()
+  return path
+end
+
 ---@param method string
 ---@param url string
 ---@param opts? { headers?: table<string,string>, body?: string, form?: table<string,string>, follow_redirects?: boolean, timeout?: number }
@@ -18,11 +41,27 @@ function M.request(method, url, opts, callback)
   opts = opts or {}
   local args = { "curl", "-s", "-w", "\n__DMOJ_STATUS__%{http_code}", "-X", method }
 
-  -- Headers
+  -- Temp files to clean up after the request
+  local temp_files = {}
+
+  -- Headers: write to a temp file and use --header @file to keep them off ps aux
   if opts.headers then
+    local lines = {}
     for k, v in pairs(opts.headers) do
-      table.insert(args, "-H")
-      table.insert(args, k .. ": " .. v)
+      table.insert(lines, k .. ": " .. v)
+    end
+    local header_content = table.concat(lines, "\n") .. "\n"
+    local hpath = write_temp(header_content)
+    if hpath then
+      table.insert(temp_files, hpath)
+      table.insert(args, "--header")
+      table.insert(args, "@" .. hpath)
+    else
+      -- Fallback: pass headers inline (less secure but functional)
+      for k, v in pairs(opts.headers) do
+        table.insert(args, "-H")
+        table.insert(args, k .. ": " .. v)
+      end
     end
   end
 
@@ -35,11 +74,26 @@ function M.request(method, url, opts, callback)
   table.insert(args, "-D")
   table.insert(args, "-")
 
-  -- Form body (application/x-www-form-urlencoded)
+  -- Form body: build url-encoded string, write to temp file, use --data @file
   if opts.form then
+    local parts = {}
     for k, v in pairs(opts.form) do
-      table.insert(args, "--data-urlencode")
-      table.insert(args, k .. "=" .. v)
+      table.insert(parts, url_encode(k) .. "=" .. url_encode(v))
+    end
+    local form_body = table.concat(parts, "&")
+    local fpath = write_temp(form_body)
+    if fpath then
+      table.insert(temp_files, fpath)
+      table.insert(args, "--data")
+      table.insert(args, "@" .. fpath)
+      table.insert(args, "-H")
+      table.insert(args, "Content-Type: application/x-www-form-urlencoded")
+    else
+      -- Fallback: pass form data inline
+      for k, v in pairs(opts.form) do
+        table.insert(args, "--data-urlencode")
+        table.insert(args, k .. "=" .. v)
+      end
     end
   end
 
@@ -58,6 +112,11 @@ function M.request(method, url, opts, callback)
   table.insert(args, url)
 
   vim.system(args, { text = true }, function(result)
+    -- Clean up temp files immediately after curl exits
+    for _, p in ipairs(temp_files) do
+      os.remove(p)
+    end
+
     vim.schedule(function()
       if result.code ~= 0 then
         callback({

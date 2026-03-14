@@ -34,6 +34,10 @@ end
 ---@param cookie string
 function M.save_cookie(cookie)
   local path = get_cookie_path()
+  -- Create (or truncate) with restricted permissions BEFORE writing,
+  -- eliminating the TOCTOU race where io.open would create a world-readable file.
+  vim.fn.writefile({}, path)
+  vim.fn.setfperm(path, "rw-------")
   local f = io.open(path, "w")
   if not f then
     vim.notify("[dmoj] Failed to write cookie file: " .. path, vim.log.levels.ERROR)
@@ -41,7 +45,6 @@ function M.save_cookie(cookie)
   end
   f:write(cookie)
   f:close()
-  vim.fn.setfperm(path, "rw-------")
 end
 
 --- Delete stored cookie.
@@ -86,7 +89,17 @@ function M.get_csrf_token()
   return token
 end
 
-local UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+--- Build a User-Agent string reflecting the actual OS.
+---@return string
+local function build_ua()
+  if vim.fn.has("mac") == 1 then
+    return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  else
+    return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  end
+end
+
+local UA = build_ua()
 
 --- Build common headers for authenticated requests.
 ---@return table<string,string>|nil headers, or nil if not logged in

@@ -45,6 +45,14 @@ local lang_commands = {
 ---@return table|nil commands { compile?: string[], run: string[] }
 local function resolve_commands(lang_key)
   local key = lang_key:upper()
+  -- Warn if python2 is used on macOS 12.3+ where it was removed
+  if key == "PY2" and vim.fn.has("mac") == 1 then
+    vim.notify(
+      "[dmoj] Warning: python2 was removed in macOS 12.3 (Monterey). " ..
+      "The local runner may fail. Consider using PY3 instead.",
+      vim.log.levels.WARN
+    )
+  end
   if lang_commands[key] then
     return lang_commands[key]
   end

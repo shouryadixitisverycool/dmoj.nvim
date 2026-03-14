@@ -8,6 +8,17 @@ local M = {}
 ---@field open_cmd string
 ---@field arg string CLI argument to trigger direct-launch (e.g. "nvim dmoj.nvim")
 
+--- Detect the correct "open URL" command for the current OS.
+---@return string
+local function detect_open_cmd()
+  if vim.fn.has("mac") == 1 then
+    return "open"
+  else
+    -- Linux (and other Unix-likes)
+    return "xdg-open"
+  end
+end
+
 ---@type dmoj.Config
 M.defaults = {
   base_url = "https://dmoj.ca",
@@ -20,7 +31,7 @@ M.defaults = {
     desc = "<leader>dd",
     open_browser = "<leader>do",
   },
-  open_cmd = "xdg-open", -- macOS: "open", Windows: "start"
+  open_cmd = detect_open_cmd(),
   arg = "dmoj.nvim",     -- launch arg: `nvim dmoj.nvim` opens the dashboard
 }
 
