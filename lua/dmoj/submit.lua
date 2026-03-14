@@ -5,6 +5,25 @@ local http = require("dmoj.http")
 local auth = require("dmoj.auth")
 local ui = require("dmoj.ui")
 
+--- Decode common HTML entities in scraped text.
+---@param s string
+---@return string
+local function decode_entities(s)
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&amp;", "&")
+  s = s:gsub("&quot;", '"')
+  s = s:gsub("&#39;", "'")
+  s = s:gsub("&nbsp;", " ")
+  s = s:gsub("\xc2\xa0", " ")
+  s = s:gsub("&#(%d+);", function(n)
+    local num = tonumber(n)
+    if num and num < 128 then return string.char(num) end
+    return ""
+  end)
+  return s
+end
+
 --- Derive the correct verdict from test cases and points.
 --- Centralizes logic that was previously duplicated across scrape/poll/show.
 --- Handles both flat case lists and mixed lists containing batch groups.
@@ -857,7 +876,7 @@ local function scrape_submission_details(submission_id, data, callback)
     -- Extract problem name
     local problem = plain:match('Submission of%s+(.-)%s+by')
     if problem then
-      data.problem = vim.trim(problem)
+      data.problem = decode_entities(vim.trim(problem))
     end
 
     -- Derive the correct result from test cases and points
@@ -944,7 +963,7 @@ function M.poll_result_scrape(submission_id, attempt)
     -- Extract points using shared helper
     local points, total = extract_score(plain)
 
-    local problem = plain:match('Submission of%s+(.-)%s+by') or "?"
+    local problem = decode_entities(plain:match('Submission of%s+(.-)%s+by') or "?")
 
     local ce = body:match('Compilation Error.-<pre[^>]*>(.-)</pre>')
     local compile_error = nil
