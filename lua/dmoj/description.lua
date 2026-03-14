@@ -944,4 +944,7 @@ function M.show(code, meta)
   end)
 end
 
+--- Export html_to_lines for reuse in other modules (e.g., contests).
+M.html_to_lines = html_to_lines
+
 return M

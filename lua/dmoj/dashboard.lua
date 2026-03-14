@@ -268,10 +268,9 @@ function M.open()
     require("dmoj.problems").open()
   end, kopts)
 
-  -- [c] Contests - open contests page in browser
+  -- [c] Contests
   vim.keymap.set("n", "c", function()
-    local url = config.options.base_url .. "/contests/"
-    vim.fn.jobstart({ config.options.open_cmd, url }, { detach = true })
+    require("dmoj.contests").open()
   end, kopts)
 
   -- [s] Submissions

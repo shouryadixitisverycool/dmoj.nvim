@@ -8,6 +8,7 @@ Works with [dmoj.ca](https://dmoj.ca) and any self-hosted DMOJ instance (e.g. a 
 
 - Dashboard home screen with ASCII art and quick-access menu
 - Telescope-powered fuzzy problem picker (with fallback for no-telescope setups)
+- Browse and join contests directly from Neovim
 - Read problem statements scraped and rendered inline (no browser needed)
 - Submit solutions directly from your buffer using session cookie auth
 - Polls for the judge verdict automatically and shows per-case results
@@ -174,6 +175,7 @@ require("dmoj").setup({
 | `:Dmoj` or `:Dmoj menu` | Open the dashboard home screen |
 | `:Dmoj list` | Browse problems with telescope fuzzy picker |
 | `:Dmoj open <code>` | Open a specific problem by its code |
+| `:Dmoj contests` | Browse contests (active, upcoming, past) |
 | `:Dmoj submit` | Submit the current buffer |
 | `:Dmoj submit <code>` | Submit the current buffer to a specific problem |
 | `:Dmoj run` | Run current buffer locally against sample test cases |
@@ -203,6 +205,7 @@ Opened with `:Dmoj menu`. Shows an ASCII art logo and quick-access menu:
                 https://oj-test.iiit.ac.in
 
   [l]  Problems               Browse and search problems
+  [c]  Contests               Browse and join contests
   [s]  Submit                  Submit current buffer
   [i]  Login                   Paste session cookie
   [w]  Who Am I                Check login status
@@ -224,6 +227,38 @@ Uses **telescope.nvim** for fuzzy searching across problem code, name, and group
 | `Esc` / `Ctrl-c` | Close picker |
 
 If telescope is not installed, a fallback floating window picker is used instead.
+
+## Contest Browser
+
+Opened with `:Dmoj contests` or `[c]` from the dashboard.
+
+Lists all **active**, **upcoming**, and **past** contests scraped from the `/contests/` page. Uses Telescope for fuzzy search (with fallback float).
+
+**Contest Picker:**
+
+| Key | Action |
+|---|---|
+| `Enter` | Open contest detail view |
+| `Ctrl-o` / `o` | Open contest in browser |
+| `Ctrl-r` | Refresh contest cache |
+| `Esc` / `Ctrl-c` | Close picker |
+
+Icons in the picker indicate status:
+- `★` — currently participating
+- `●` — active contest
+- `◷` — upcoming contest
+- `○` — past contest
+
+**Contest Detail View:**
+
+Selecting a contest opens a full-window detail view showing the contest title, join status, duration, time remaining, and description.
+
+| Key | Action |
+|---|---|
+| `Enter` | Join the contest (if not joined) |
+| `Backspace` | Leave the contest (if joined) |
+| `o` | Open in browser |
+| `q` | Close |
 
 ## Opening a Problem
 
@@ -329,6 +364,7 @@ dmoj.nvim/
     ├── dashboard.lua       # Home screen with ASCII art and menu
     ├── problems.lua        # Telescope picker + open problem workflow
     ├── description.lua     # HTML → plain text renderer
+    ├── contests.lua        # Contest browser, detail view, join/leave
     ├── submit.lua          # Submission, polling, result display
     ├── submissions.lua     # Submission history list
     └── runner.lua          # Local compile+run against sample test cases

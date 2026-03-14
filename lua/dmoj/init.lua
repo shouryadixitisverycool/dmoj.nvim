@@ -106,8 +106,7 @@ function M._dispatch(subcmd, args)
     })
 
   elseif subcmd == "contests" then
-    local url = config.options.base_url .. "/contests/"
-    vim.fn.jobstart({ config.options.open_cmd, url }, { detach = true })
+    require("dmoj.contests").open()
 
   elseif subcmd == "login" then
     require("dmoj.auth").login()
