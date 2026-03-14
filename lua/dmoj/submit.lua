@@ -959,6 +959,50 @@ function M.poll_result_scrape(submission_id, attempt)
     -- Scrape test cases from raw HTML
     local cases = scrape_test_cases(body)
 
+    -- Derive running score from individual case points when the page-level
+    -- "Final score:" line hasn't appeared yet (still judging).
+    if points == 0 and total == 0 and cases and #cases > 0 then
+      local running_pts = 0
+      local running_tot = 0
+      for _, c in ipairs(cases) do
+        if c.type == "batch" then
+          -- batch header has points/total
+          running_pts = running_pts + (c.points or 0)
+          running_tot = running_tot + (c.total or 0)
+        elseif c.type == "case" and not c._batched then
+          -- non-batched individual case
+          running_pts = running_pts + (c.points or 0)
+          running_tot = running_tot + (c.total or 0)
+        end
+      end
+      if running_tot > 0 then
+        points = running_pts
+        total = running_tot
+      end
+    end
+
+    -- Derive running resources (max time, sum of max memory) from individual
+    -- cases when the page-level "Resources:" line hasn't appeared yet.
+    if time_val == 0 and mem_val == 0 and cases and #cases > 0 then
+      local max_time = 0
+      local max_mem = 0
+      for _, c in ipairs(cases) do
+        if c.type == "case" then
+          if (c.time or 0) > max_time then max_time = c.time end
+          if (c.memory or 0) > max_mem then max_mem = c.memory end
+        elseif c.type == "batch" and c.cases then
+          for _, bc in ipairs(c.cases) do
+            if (bc.time or 0) > max_time then max_time = bc.time end
+            if (bc.memory or 0) > max_mem then max_mem = bc.memory end
+          end
+        end
+      end
+      if max_time > 0 or max_mem > 0 then
+        time_val = max_time
+        mem_val = max_mem
+      end
+    end
+
     -- Build a result data table compatible with show_result
     local data = {
       id = submission_id,
@@ -986,15 +1030,20 @@ function M.poll_result_scrape(submission_id, attempt)
     -- Derive correct result now that we have all the data
     data.result = derive_result(cases, points, total, data.result)
 
-    -- If we still don't have a result after many attempts, show what we have
+    -- If we still don't have a scraped result from the page, check whether
+    -- derive_result was able to determine it from the cases. If so, show
+    -- immediately — don't retry and add unnecessary delay.
     if not result or result == "" then
-      if attempt < 15 then
+      if data.result ~= "??" then
+        -- derive_result gave us a definitive answer from case data; show it.
+      elseif attempt < 15 then
         vim.defer_fn(function()
           M.poll_result_scrape(submission_id, attempt + 1)
         end, 1000)
         return
+      else
+        data.result = "??"
       end
-      data.result = "??"
     end
 
     M.show_result(data)
