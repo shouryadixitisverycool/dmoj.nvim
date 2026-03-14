@@ -58,36 +58,25 @@ end
 local function parse_submissions(body)
   local submissions = {}
 
-  -- More robust: find each submission-row by ID and extract data from nearby HTML
-  for sub_id, row_block in body:gmatch('<div class="submission%-row" id="(%d+)">(.-)<div class="submission%-row"') do
-    local entry = M._parse_single_row(sub_id, row_block)
+  -- Collect start positions and IDs of every submission-row div.
+  -- We cannot use gmatch with '.-' between two row anchors because Lua's
+  -- non-greedy match consumes every other row as part of the delimiter.
+  -- Instead, find each row's start position then slice up to the next row.
+  local row_starts = {}  -- { pos, sub_id }
+  local search_pos = 1
+  while true do
+    local s, e, sub_id = body:find('<div class="submission%-row" id="(%d+)">', search_pos)
+    if not s then break end
+    table.insert(row_starts, { pos = s, id = sub_id, inner_start = e + 1 })
+    search_pos = e + 1
+  end
+
+  for i, row in ipairs(row_starts) do
+    local block_end = row_starts[i + 1] and (row_starts[i + 1].pos - 1) or #body
+    local row_block = body:sub(row.inner_start, block_end)
+    local entry = M._parse_single_row(row.id, row_block)
     if entry then
       table.insert(submissions, entry)
-    end
-  end
-
-  -- Handle the last submission row (no following submission-row div)
-  local all_ids = {}
-  for sub_id in body:gmatch('<div class="submission%-row" id="(%d+)">') do
-    table.insert(all_ids, sub_id)
-  end
-
-  local captured_ids = {}
-  for _, s in ipairs(submissions) do
-    captured_ids[s.id] = true
-  end
-
-  -- Parse any missing rows (typically the last one)
-  for _, sub_id in ipairs(all_ids) do
-    if not captured_ids[sub_id] then
-      local pattern = '<div class="submission%-row" id="' .. sub_id .. '">(.-)</div>%s*</div>%s*</div>'
-      local row_block = body:match(pattern)
-      if row_block then
-        local entry = M._parse_single_row(sub_id, row_block)
-        if entry then
-          table.insert(submissions, entry)
-        end
-      end
     end
   end
 
