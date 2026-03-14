@@ -286,7 +286,6 @@ function M.submit(opts)
 
     local submit_url = config.options.base_url .. "/problem/" .. problem_code .. "/submit"
     headers["Referer"] = submit_url
-    headers["Content-Type"] = "application/x-www-form-urlencoded"
 
     http.post(submit_url, {
       headers = headers,

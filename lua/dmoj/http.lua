@@ -74,26 +74,15 @@ function M.request(method, url, opts, callback)
   table.insert(args, "-D")
   table.insert(args, "-")
 
-  -- Form body: build url-encoded string, write to temp file, use --data @file
+  -- Form body: use --data-urlencode per field (curl handles the encoding).
+  -- Unlike --data @file this is fully reliable across curl versions and avoids
+  -- subtle encoding/content-type conflicts.  The values appear in ps aux but
+  -- they are the user's own source code, not credentials.  Credentials (cookie,
+  -- CSRF token) are protected by the --header @file path above.
   if opts.form then
-    local parts = {}
     for k, v in pairs(opts.form) do
-      table.insert(parts, url_encode(k) .. "=" .. url_encode(v))
-    end
-    local form_body = table.concat(parts, "&")
-    local fpath = write_temp(form_body)
-    if fpath then
-      table.insert(temp_files, fpath)
-      table.insert(args, "--data")
-      table.insert(args, "@" .. fpath)
-      table.insert(args, "-H")
-      table.insert(args, "Content-Type: application/x-www-form-urlencoded")
-    else
-      -- Fallback: pass form data inline
-      for k, v in pairs(opts.form) do
-        table.insert(args, "--data-urlencode")
-        table.insert(args, k .. "=" .. v)
-      end
+      table.insert(args, "--data-urlencode")
+      table.insert(args, k .. "=" .. v)
     end
   end
 
