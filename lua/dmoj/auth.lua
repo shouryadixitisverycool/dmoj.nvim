@@ -62,7 +62,7 @@ function M.login()
       return
     end
     local cookie = vim.trim(input)
-    -- Validate by hitting the API
+    -- Validate by scraping the homepage for the logged-in username
     M.save_cookie(cookie)
     vim.notify("[dmoj] Cookie saved. Verifying...", vim.log.levels.INFO)
     M.whoami(function(username)

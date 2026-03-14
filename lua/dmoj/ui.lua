@@ -51,7 +51,14 @@ function M.open_float(bufnr, opts)
   opts = opts or {}
   local width = opts.width or math.floor(vim.o.columns * 0.8)
   local height = opts.height or math.floor(vim.o.lines * 0.8)
-  local row = math.floor((vim.o.lines - height) / 2)
+  -- Account for tabline and cmdheight so the float is visually centered.
+  -- vim.o.lines is the total terminal rows; subtract chrome to get the
+  -- usable editor area, then offset by the tabline height.
+  local tabline_height = (vim.o.showtabline == 0 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() < 2)) and 0 or 1
+  local cmdheight = vim.o.cmdheight or 1
+  local statusline_height = (vim.o.laststatus == 0) and 0 or 1
+  local usable = vim.o.lines - tabline_height - cmdheight - statusline_height
+  local row = tabline_height + math.floor((usable - height) / 2)
   local col = math.floor((vim.o.columns - width) / 2)
 
   local win_opts = {

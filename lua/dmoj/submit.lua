@@ -3,28 +3,41 @@ local M = {}
 local config = require("dmoj.config")
 local http = require("dmoj.http")
 local auth = require("dmoj.auth")
-local api = require("dmoj.api")
 local ui = require("dmoj.ui")
 
 --- Derive the correct verdict from test cases and points.
 --- Centralizes logic that was previously duplicated across scrape/poll/show.
----@param cases table[] list of test case objects with .status field
+--- Handles both flat case lists and mixed lists containing batch groups.
+---@param cases table[] list of test case objects (type="case") or batch groups (type="batch")
 ---@param case_points number points earned
 ---@param case_total number total possible points
----@param current_result string current result string (e.g. from API)
+---@param current_result string current result string
 ---@return string result the derived verdict
 local function derive_result(cases, case_points, case_total, current_result)
   local result = current_result or "??"
   if cases and #cases > 0 then
-    local counts = {}
-    local all_ac = true
-    
+    -- Flatten: collect all individual case statuses, including from batch groups
+    local flat_cases = {}
     for _, c in ipairs(cases) do
-      if c.status ~= "AC" then
-        all_ac = false
+      if c.type == "batch" and c.cases then
+        for _, bc in ipairs(c.cases) do
+          table.insert(flat_cases, bc)
+        end
+      elseif c.status then
+        table.insert(flat_cases, c)
       end
-      counts[c.status] = (counts[c.status] or 0) + 1
     end
+
+    if #flat_cases > 0 then
+      local counts = {}
+      local all_ac = true
+
+      for _, c in ipairs(flat_cases) do
+        if c.status ~= "AC" then
+          all_ac = false
+        end
+        counts[c.status] = (counts[c.status] or 0) + 1
+      end
     
     if all_ac then
       result = "AC"
@@ -53,6 +66,7 @@ local function derive_result(cases, case_points, case_total, current_result)
       if best_status then
         result = best_status
       end
+    end
     end
   end
 
@@ -301,21 +315,17 @@ function M.submit(opts)
         local submission_id = extract_submission_id(location)
 
         if submission_id then
-          ui.notify("Submitted! Polling for results...", vim.log.levels.INFO)
           M.poll_result(tonumber(submission_id))
         else
           -- Also check the response body (some servers include it in 302 body)
           submission_id = extract_submission_id(resp.body)
           if submission_id then
-            ui.notify("Submitted! Polling for results...", vim.log.levels.INFO)
             M.poll_result(tonumber(submission_id))
           elseif location ~= "" then
             -- Follow the redirect to find the submission ID
-            ui.notify("Submitted! Looking up submission...", vim.log.levels.INFO)
             M._follow_redirect_for_id(location, problem_code, headers)
           else
             -- Last resort: scrape recent submissions for this problem
-            ui.notify("Submitted! Looking up submission...", vim.log.levels.INFO)
             M._find_latest_submission(problem_code, headers)
           end
         end
@@ -323,7 +333,6 @@ function M.submit(opts)
         -- Check if 200 is actually a redirect page (some setups return 200 with redirect)
         local meta_redirect = resp.body:match('url=/submission/(%d+)')
         if meta_redirect then
-          ui.notify("Submitted! Polling for results...", vim.log.levels.INFO)
           M.poll_result(tonumber(meta_redirect))
           return
         end
@@ -331,7 +340,6 @@ function M.submit(opts)
         -- Check if the body contains a submission ID link
         local body_sub_id = extract_submission_id(resp.body)
         if body_sub_id then
-          ui.notify("Submitted! Polling for results...", vim.log.levels.INFO)
           M.poll_result(tonumber(body_sub_id))
           return
         end
@@ -375,7 +383,6 @@ function M._follow_redirect_for_id(location, problem_code, req_headers)
       or resp.body:match("submission%-id[^>]*>%s*(%d+)")
       or resp.body:match('data%-id="(%d+)"')
     if submission_id then
-      ui.notify("Polling for results...", vim.log.levels.INFO)
       M.poll_result(tonumber(submission_id))
     else
       M._find_latest_submission(problem_code, req_headers)
@@ -405,7 +412,6 @@ function M._find_latest_submission(problem_code, req_headers)
     end
 
     if max_id then
-      ui.notify("Found submission #" .. max_id .. ". Polling for results...", vim.log.levels.INFO)
       M.poll_result(max_id)
     else
       -- Try the general submissions page
@@ -421,7 +427,6 @@ function M._find_latest_submission(problem_code, req_headers)
             end
           end
           if gen_max_id then
-            ui.notify("Found submission #" .. gen_max_id .. ". Polling for results...", vim.log.levels.INFO)
             M.poll_result(gen_max_id)
             return
           end
@@ -432,51 +437,389 @@ function M._find_latest_submission(problem_code, req_headers)
   end)
 end
 
---- Scrape test case details from the submission page HTML.
---- Returns a list of case tables, or empty table if none found.
----@param body string HTML body
----@return table[] cases
-local function scrape_test_cases(plain)
-  -- Convert HTML entities just in case (e.g., &nbsp;)
-  plain = plain:gsub("&nbsp;", " "):gsub("p", " ")
+--- Normalize whitespace in scraped text: convert non-breaking spaces (UTF-8
+--- \xc2\xa0 from Django's avoid_wrapping) and HTML entities to regular spaces.
+---@param s string
+---@return string
+local function normalize_ws(s)
+  s = s:gsub("\xc2\xa0", " ")   -- UTF-8 non-breaking space
+  s = s:gsub("&nbsp;", " ")
+  s = s:gsub("&amp;", "&")
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&mdash;", "—")
+  s = s:gsub("&ndash;", "–")
+  s = s:gsub("&times;", "×")
+  return s
+end
 
+--- Parse a memory string like "1.58 MB" or "256 KB" into KB.
+--- Handles B, KB, MB, GB, TB units.
+---@param mem_str string e.g. "1.58" or "256"
+---@param unit_str string e.g. "MB", "KB", "B"
+---@return number memory_in_kb
+local function parse_memory_kb(mem_str, unit_str)
+  local m = tonumber(mem_str) or 0
+  local u = unit_str:upper()
+  if u == "B" then return m / 1024
+  elseif u == "KB" then return m
+  elseif u == "MB" then return m * 1024
+  elseif u == "GB" then return m * 1024 * 1024
+  elseif u == "TB" then return m * 1024 * 1024 * 1024
+  end
+  -- Single-char fallback: "K" -> KB, "M" -> MB, etc.
+  if u:sub(1, 1) == "K" then return m
+  elseif u:sub(1, 1) == "M" then return m * 1024
+  elseif u:sub(1, 1) == "G" then return m * 1024 * 1024
+  end
+  return m
+end
+
+--- Parse a time string that may be a normal float or ">" prefixed (TLE)
+--- or "---" (overall TLE). Returns the numeric value or 0.
+---@param time_str string e.g. "0.085", ">2.000", "---"
+---@return number
+local function parse_time(time_str)
+  if not time_str or time_str == "---" or time_str == "" then return 0 end
+  -- Strip leading ">" for TLE cases (template: [>Xs,])
+  local stripped = time_str:gsub("^>", "")
+  return tonumber(stripped) or 0
+end
+
+--- Parse resource bracket like "[0.007s, 1.20 MB]" or "[>2.000s, 256 KB]"
+--- from tag-stripped text. Returns time, memory_kb or nil.
+---@param text string the text fragment to parse
+---@return number|nil time
+---@return number|nil memory_kb
+local function parse_resources_bracket(text)
+  -- After tag stripping, the bracket looks like:
+  --   [0.007s,1.20 MB]  or  [>2.000s,256 KB]  or  [---,1.58 MB]
+  -- With possible spaces collapsed or present.
+  local time_str, mem_str, unit =
+    text:match("%[%s*(>?[%d%.%-]+)s?,%s*([%d%.]+)%s*(%a+)%s*%]")
+  if not time_str then
+    -- Try without trailing "s" on time (in case "---," has no "s")
+    time_str, mem_str, unit =
+      text:match("%[%s*(%-%-%-),?%s*([%d%.]+)%s*(%a+)%s*%]")
+  end
+  if time_str then
+    return parse_time(time_str), parse_memory_kb(mem_str, unit)
+  end
+  return nil, nil
+end
+
+--- Scrape test case details from the submission page HTML.
+--- Returns a list of case/batch tables, or empty table if none found.
+---@param body string raw HTML body (NOT tag-stripped)
+---@return table[] cases
+local function scrape_test_cases(body)
   local cases = {}
 
-  for case_id, status_raw, time_s, mem, unit, pts, total in
-    plain:gmatch('#(%d+):%s*(.-)%s*%[%s*([%d%.]+)%s*s,%s*([%d%.]+)%s*(%wB)%s*%]%s*%(([%d%.]+)/([%d%.]+)%)')
+  -- Normalize the HTML: convert entities and non-breaking spaces
+  local html = normalize_ws(body)
+
+  -- Strategy 1: Parse the submissions-status-table rows.
+  -- Each test case row contains cells like:
+  --   <td><b>Test case #1:</b></td>
+  --   <td><span class="case-AC">AC</span></td>
+  --   <td>[<span>0.007s,</span></td>
+  --   <td>1.20 MB]</td>
+  --   <td>(10/10)</td>      -- only for non-batched cases
+  --
+  -- For batched cases, the heading is "Case #N:" and there's no points column.
+  -- Batches are preceded by: <b>Batch #N</b>(X/Y points)
+
+  -- Detect batches: <b>Batch #N</b> ... (X/Y points)
+  -- We'll track batch boundaries by scanning for batch headers in the HTML.
+  local batch_positions = {}
+  for batch_start, batch_id, batch_rest in
+    html:gmatch("()Batch #(%d+)</b>(.-)<%s*table")
   do
-    local status = status_raw:match("^%s*(%S+)") or status_raw
-    local extra = status_raw:match("^%s*%S+%s+(.*)$") or ""
-    table.insert(cases, {
-      type = "case",
-      case_id = tonumber(case_id) or 0,
-      status = vim.trim(status):upper(),
-      extra = vim.trim(extra),
-      time = tonumber(time_s) or 0,
-      memory = unit:upper() == "MB" and ((tonumber(mem) or 0) * 1024) or (tonumber(mem) or 0),
-      points = tonumber(pts) or 0,
-      total = tonumber(total) or 0,
+    local bp, bt = batch_rest:match("(%d+)/(%d+)%s*points?")
+    table.insert(batch_positions, {
+      pos = batch_start,
+      id = tonumber(batch_id) or 0,
+      points = tonumber(bp) or 0,
+      total = tonumber(bt) or 0,
     })
   end
 
+  -- Now parse each table row (case row)
+  -- We look for <tr> blocks containing case info, tracking position in HTML
+  for row_start, row_html in html:gmatch("()<tr[^>]*class=\"case%-row[^\"]*\"[^>]*>(.-)</tr>") do
+    -- Extract the cells by stripping tags from each <td>
+    local cells = {}
+    for td_content in row_html:gmatch("<td[^>]*>(.-)</td>") do
+      -- Strip HTML tags but preserve text
+      local cell_text = td_content:gsub("<[^>]+>", "")
+      table.insert(cells, vim.trim(cell_text))
+    end
+
+    if #cells >= 2 then
+      -- Cell 1: "Test case #1:" or "Case #1:" or "Pretest #1:"
+      local case_id = cells[1]:match("#(%d+)")
+      local is_batched = cells[1]:match("^Case #") ~= nil
+
+      -- Cell 2: verdict like "AC", "WA", "TLE", etc. May have feedback: "WA (wrong output)"
+      local status_text = cells[2]
+      -- The status may contain an em-dash for SC (short-circuited)
+      if status_text == "—" or status_text == "–" then
+        status_text = "SC"
+      end
+      local status = status_text:match("^(%u+)") or status_text
+      local feedback = status_text:match("%((.-)%)") or ""
+
+      -- Cells 3-4: resource bracket parts "[0.007s," and "1.20 MB]"
+      local time_val = 0
+      local mem_val = 0
+      if #cells >= 4 then
+        -- Reconstruct the bracket from cells 3 and 4
+        local bracket = cells[3] .. " " .. cells[4]
+        local t, m = parse_resources_bracket(bracket)
+        if t then time_val = t end
+        if m then mem_val = m end
+      end
+
+      -- Cell 5 (optional): points "(10/10)" — only for non-batched cases
+      local pts = 0
+      local tot = 0
+      if not is_batched and #cells >= 5 then
+        local p, t = cells[5]:match("(%d+)/(%d+)")
+        pts = tonumber(p) or 0
+        tot = tonumber(t) or 0
+      end
+
+      local case_entry = {
+        type = "case",
+        case_id = tonumber(case_id) or 0,
+        status = vim.trim(status):upper(),
+        extra = vim.trim(feedback),
+        time = time_val,
+        memory = mem_val,
+        points = pts,
+        total = tot,
+        _html_pos = row_start,  -- track position for batch assignment
+      }
+
+      -- Check if this case belongs to a batch
+      if is_batched then
+        case_entry._batched = true
+      end
+
+      table.insert(cases, case_entry)
+    end
+  end
+
+  -- Strategy 2: If Strategy 1 found nothing, try tag-stripped text parsing.
+  -- This is a fallback for non-standard DMOJ instances or custom templates.
   if #cases == 0 then
-    -- fallback for cases with no resources (like CE, IR)
-    for case_id, status_raw in plain:gmatch('#(%d+):%s*([A-Za-z]+)') do
+    local plain = normalize_ws(html:gsub("<[^>]+>", " "))
+    -- Collapse multiple spaces
+    plain = plain:gsub("%s+", " ")
+
+    -- Pattern: "Test case #1: AC [0.007s, 1.20 MB] (10/10)"
+    -- Or:      "Case #1: WA [>2.000s, 256 KB]"
+    -- Or:      "Test case #1: SC"  (short-circuited, no bracket)
+    for label, case_id, status_chunk in
+      plain:gmatch("(Test case%s+#(%d+):%s*(.-))")
+    do
+      -- Limit the chunk to avoid spanning across cases
+      -- Find the next "Test case" or "Case #" or "Batch #" or "Resources:" or end
+      local chunk_end = status_chunk:find("Test case%s+#")
+        or status_chunk:find("Case%s+#")
+        or status_chunk:find("Batch%s+#")
+        or status_chunk:find("Resources:")
+        or status_chunk:find("Final score:")
+        or #status_chunk + 1
+      local chunk = status_chunk:sub(1, chunk_end - 1)
+
+      local status = chunk:match("^(%u+)") or chunk:match("^(—)") or "?"
+      if status == "—" or status == "–" then status = "SC" end
+      local feedback = chunk:match("%(([^%d][^%)]*%)") or ""
+
+      local time_val, mem_val = parse_resources_bracket(chunk)
+
+      local pts, tot = 0, 0
+      -- Match points like (10/10) but not the resource bracket's content
+      local pts_str, tot_str = chunk:match("%]%s*%((%d+)/(%d+)%)")
+      if pts_str then
+        pts = tonumber(pts_str) or 0
+        tot = tonumber(tot_str) or 0
+      end
+
+      table.insert(cases, {
+        type = "case",
+        case_id = tonumber(case_id) or 0,
+        status = vim.trim(status):upper(),
+        extra = vim.trim(feedback),
+        time = time_val or 0,
+        memory = mem_val or 0,
+        points = pts,
+        total = tot,
+      })
+    end
+
+    -- Also try "Case #N:" (batched) pattern
+    for case_id, status_chunk in
+      plain:gmatch("Case%s+#(%d+):%s*(.-)%s*Case%s+#")
+    do
+      local status = status_chunk:match("^(%u+)") or "?"
+      local time_val, mem_val = parse_resources_bracket(status_chunk)
+      table.insert(cases, {
+        type = "case",
+        case_id = tonumber(case_id) or 0,
+        status = vim.trim(status):upper(),
+        extra = "",
+        time = time_val or 0,
+        memory = mem_val or 0,
+        points = 0,
+        total = 0,
+        _batched = true,
+      })
+    end
+    -- Last batched case (no following "Case #")
+    local last_batched_id, last_batched_chunk =
+      plain:match("Case%s+#(%d+):%s*(.-)%s*[BR]")
+    if last_batched_id and not plain:find("Test case%s+#" .. last_batched_id) then
+      local status = last_batched_chunk:match("^(%u+)") or "?"
+      local time_val, mem_val = parse_resources_bracket(last_batched_chunk)
+      table.insert(cases, {
+        type = "case",
+        case_id = tonumber(last_batched_id) or 0,
+        status = vim.trim(status):upper(),
+        extra = "",
+        time = time_val or 0,
+        memory = mem_val or 0,
+        points = 0,
+        total = 0,
+        _batched = true,
+      })
+    end
+  end
+
+  -- Strategy 3: Last resort — just find "#N: VERDICT" patterns
+  if #cases == 0 then
+    local plain = normalize_ws(html:gsub("<[^>]+>", " "))
+    plain = plain:gsub("%s+", " ")
+    for case_id, status_raw in plain:gmatch("#(%d+):%s*(%u+)") do
       table.insert(cases, {
         type = "case",
         case_id = tonumber(case_id) or 0,
         status = vim.trim(status_raw):upper(),
         extra = "",
-        time = 0, memory = 0, points = 0, total = 0
+        time = 0, memory = 0, points = 0, total = 0,
       })
+    end
+  end
+
+  -- Group batched cases if batch info was detected
+  if #batch_positions > 0 and #cases > 0 then
+    local batched_cases = {}
+    local unbatched_cases = {}
+    for _, c in ipairs(cases) do
+      if c._batched then
+        table.insert(batched_cases, c)
+        c._batched = nil  -- clean up internal flag
+      else
+        table.insert(unbatched_cases, c)
+      end
+    end
+
+    if #batched_cases > 0 then
+      -- Build final list: unbatched cases + batch groups
+      cases = {}
+      for _, c in ipairs(unbatched_cases) do
+        c._html_pos = nil
+        table.insert(cases, c)
+      end
+
+      -- Create batch group containers
+      local batch_case_groups = {}
+      for _, bp in ipairs(batch_positions) do
+        batch_case_groups[bp.id] = {
+          type = "batch",
+          batch_id = bp.id,
+          points = bp.points,
+          total = bp.total,
+          cases = {},
+        }
+      end
+
+      -- Assign each batched case to the batch whose HTML position is
+      -- closest before it (the most recent batch header above the case row).
+      for _, c in ipairs(batched_cases) do
+        local best_batch_id = nil
+        local best_pos = -1
+        local case_pos = c._html_pos or 0
+        c._html_pos = nil  -- clean up internal field
+        for _, bp in ipairs(batch_positions) do
+          if bp.pos <= case_pos and bp.pos > best_pos then
+            best_pos = bp.pos
+            best_batch_id = bp.id
+          end
+        end
+        if best_batch_id and batch_case_groups[best_batch_id] then
+          table.insert(batch_case_groups[best_batch_id].cases, c)
+        end
+      end
+
+      -- Add batch groups to cases list
+      for _, bp in ipairs(batch_positions) do
+        if batch_case_groups[bp.id] and #batch_case_groups[bp.id].cases > 0 then
+          table.insert(cases, batch_case_groups[bp.id])
+        end
+      end
+    end
+  else
+    -- No batches: clean up _html_pos from all cases
+    for _, c in ipairs(cases) do
+      c._html_pos = nil
     end
   end
 
   return cases
 end
 
+--- Extract resources (time, memory) from tag-stripped, normalized text.
+--- Handles "Resources: 0.085s, 1.58 MB", "Resources: ---,1.58 MB" (TLE), etc.
+---@param plain string normalized tag-stripped text
+---@return number time_val
+---@return number mem_kb
+local function extract_resources(plain)
+  -- Pattern 1: normal — "Resources: 0.085s, 1.58 MB"
+  local res_time, res_mem, res_unit =
+    plain:match("Resources:%s*(>?[%d%.]+)s[,;]%s*([%d%.]+)%s*(%a+)")
+  if res_time then
+    return parse_time(res_time), parse_memory_kb(res_mem, res_unit)
+  end
+  -- Pattern 2: TLE — "Resources: ---, 1.58 MB" or "Resources:---,1.58 MB"
+  res_mem, res_unit = plain:match("Resources:%s*%-%-%-,?%s*([%d%.]+)%s*(%a+)")
+  if res_mem then
+    return 0, parse_memory_kb(res_mem, res_unit)
+  end
+  return 0, 0
+end
+
+--- Extract score from tag-stripped, normalized text.
+--- Handles "Final score: 50/100 (50.0/100.0 points)" and variants.
+---@param plain string
+---@return number points
+---@return number total
+local function extract_score(plain)
+  -- "Final score: 50/100" or "Final pretest score: 50/100"
+  local score_got, score_total = plain:match("Final.-score:%s*([%d%.]+)/([%d%.]+)")
+  if score_got then
+    return tonumber(score_got) or 0, tonumber(score_total) or 0
+  end
+  -- "(50.0/100.0 points)"
+  local pts, tot = plain:match("%(([%d%.]+)/([%d%.]+)%s+points?%)")
+  if pts then
+    return tonumber(pts) or 0, tonumber(tot) or 0
+  end
+  return 0, 0
+end
+
 --- Scrape additional submission details (resources, score, test cases) from HTML.
---- Used to supplement API data which may lack test case details.
 ---@param submission_id number
 ---@param data table existing submission data to augment
 ---@param callback fun(data: table)
@@ -492,41 +835,29 @@ local function scrape_submission_details(submission_id, data, callback)
 
     local body = resp.body
 
-    local plain = body:gsub("<[^>]+>", "")
-
-    -- Scrape test cases
-    local cases = scrape_test_cases(plain)
+    -- Scrape test cases from raw HTML (scrape_test_cases handles its own tag stripping)
+    local cases = scrape_test_cases(body)
     if #cases > 0 then
       data.cases = cases
     end
 
-    -- Try to get better resource info from the page
-    -- "Resources: 0.234s, 2.03 MB"
-    local res_time, res_mem, res_unit = plain:match("Resources:%s*([%d%.]+)s,%s*([%d%.]+)%s*(%wB)")
-    if res_time then
-      data.time = tonumber(res_time) or data.time
-      local m = tonumber(res_mem) or 0
-      if res_unit and res_unit:upper() == "MB" then m = m * 1024 end
-      data.memory = m > 0 and m or data.memory
-    end
+    -- For resources/score, use tag-stripped normalized text
+    local plain = normalize_ws(body:gsub("<[^>]+>", " "))
 
-    -- "Final score: 100/100 (100.0/100 points)"
-    local score_got, score_total = plain:match("Final score:%s*([%d%.]+)/([%d%.]+)")
-    if score_got and score_total then
-      data.case_points = tonumber(score_got) or data.case_points
-      data.case_total = tonumber(score_total) or data.case_total
-    end
-    -- Also try the "(X.X/Y points)" format
-    if not score_got then
-      local pts, tot = plain:match("%(([%d%.]+)/([%d%.]+) points?%)")
-      if pts then
-        data.case_points = tonumber(pts) or data.case_points
-        data.case_total = tonumber(tot) or data.case_total
-      end
+    -- Extract resources
+    local time_val, mem_val = extract_resources(plain)
+    if time_val > 0 then data.time = time_val end
+    if mem_val > 0 then data.memory = mem_val end
+
+    -- Extract score
+    local points, total = extract_score(plain)
+    if total > 0 then
+      data.case_points = points
+      data.case_total = total
     end
 
     -- Extract problem name
-    local problem = plain:match('Submission of%s*(.-)%s*by')
+    local problem = plain:match('Submission of%s+(.-)%s+by')
     if problem then
       data.problem = vim.trim(problem)
     end
@@ -539,7 +870,7 @@ local function scrape_submission_details(submission_id, data, callback)
 end
 
 --- Poll a submission's result until it's done judging.
---- Tries API v2 first, falls back to scraping the submission page.
+--- Scrapes the submission page for status, test cases, and resources.
 ---@param submission_id number
 ---@param attempt? number
 function M.poll_result(submission_id, attempt)
@@ -550,7 +881,7 @@ end
 ---@param submission_id number
 ---@param attempt number
 function M.poll_result_scrape(submission_id, attempt)
-  if attempt > 60 then
+  if attempt > 120 then
     ui.notify("Timed out waiting for submission " .. submission_id, vim.log.levels.WARN)
     return
   end
@@ -558,12 +889,12 @@ function M.poll_result_scrape(submission_id, attempt)
   local headers = auth.auth_headers() or {}
   local url = config.options.base_url .. "/submission/" .. tostring(submission_id)
 
-  http.get(url, { headers = headers, follow_redirects = true, timeout = 30 }, function(resp)
+  http.get(url, { headers = headers, follow_redirects = true, timeout = 10 }, function(resp)
     if resp.status ~= 200 then
       if attempt < 10 then
         vim.defer_fn(function()
           M.poll_result_scrape(submission_id, attempt + 1)
-        end, 2000)
+        end, 1000)
       else
         ui.notify("Failed to fetch submission page: HTTP " .. resp.status, vim.log.levels.ERROR)
       end
@@ -572,19 +903,30 @@ function M.poll_result_scrape(submission_id, attempt)
 
     local body = resp.body
 
-    -- Check if still judging
-    local is_processing = body:find("Grading") or body:find("Processing") or body:find("Queued")
+    -- Check if still judging: look for spinner icon or specific status messages
+    -- from the template. Avoid false positives from page chrome/navigation.
+    local is_processing = body:find('fa%-spinner fa%-pulse') ~= nil
+    if not is_processing then
+      -- Also check for the specific <h4> messages the template emits
+      is_processing = body:find("We are waiting for a suitable judge") ~= nil
+        or body:find("Your submission is being processed") ~= nil
+    end
 
     -- Extract result from various patterns
+    -- First try the explicit submission result classes used by the DMOJ status page header
     local result = nil
     result = body:match('<span[^>]*class="[^"]*sub%-result[^"]*"[^>]*>%s*([^<]+)%s*</span>')
     if not result then
       result = body:match('<span[^>]*class="[^"]*submission%-result[^"]*"[^>]*>%s*([^<]+)%s*</span>')
     end
+    -- Fallback: look for the status in the submission info section (avoid matching
+    -- individual test case verdict classes like "case-AC" which would give false positives)
     if not result then
-      for _, verdict in ipairs({"AC", "WA", "TLE", "MLE", "RTE", "CE", "IR", "OLE", "IE"}) do
-        if body:find('class="[^"]*' .. verdict:lower() .. '[^"]*"') or
-           body:find(">" .. verdict .. "<") then
+      -- Search for ">VERDICT<" but NOT inside case-VERDICT classes
+      for _, verdict in ipairs({"IE", "CE", "IR", "RTE", "MLE", "TLE", "OLE", "WA", "AC"}) do
+        -- Look for the verdict in a submission status context, not case-level
+        local pat = 'status%-tag[^>]*>%s*' .. verdict .. '%s*<'
+        if body:find(pat) or body:find('class="[^"]*result%-' .. verdict:lower() .. '[^"]*"') then
           result = verdict
           break
         end
@@ -595,52 +937,27 @@ function M.poll_result_scrape(submission_id, attempt)
       result = vim.trim(result)
     end
 
-    local plain = body:gsub("<[^>]+>", "")
+    -- Normalize and tag-strip for resources/score extraction
+    local plain = normalize_ws(body:gsub("<[^>]+>", " "))
 
-    -- Extract resource info
-    local time_val = 0
-    local mem_val = 0
-    local res_time, res_mem, res_unit = plain:match("Resources:%s*([%d%.]+)s,%s*([%d%.]+)%s*(%wB)")
-    if res_time then
-      time_val = tonumber(res_time) or 0
-      local m = tonumber(res_mem) or 0
-      if res_unit and res_unit:upper() == "MB" then m = m * 1024 end
-      mem_val = m
-    else
-      time_val = tonumber(plain:match("([%d%.]+)%s*s")) or 0
-      mem_val = tonumber(plain:match("([%d%.]+)%s*KB")) or 0
-    end
+    -- Extract resource info using shared helper
+    local time_val, mem_val = extract_resources(plain)
 
-    -- Extract points
-    local points = 0
-    local total = 0
-    local score_got, score_total = plain:match("Final score:%s*([%d%.]+)/([%d%.]+)")
-    if score_got then
-      points = tonumber(score_got) or 0
-      total = tonumber(score_total) or 0
-    else
-      local pts, tot = plain:match("%(([%d%.]+)/([%d%.]+) points?%)")
-      if pts then
-        points = tonumber(pts) or 0
-        total = tonumber(tot) or 0
-      else
-        points = tonumber(plain:match("([%d%.]+)%s*/[%d%.]+%s*points?")) or 0
-        total = tonumber(plain:match("[%d%.]+%s*/(%s*[%d%.]+)%s*points?")) or 0
-      end
-    end
+    -- Extract points using shared helper
+    local points, total = extract_score(plain)
 
-    local problem = plain:match('Submission of%s*(.-)%s*by') or "?"
+    local problem = plain:match('Submission of%s+(.-)%s+by') or "?"
 
     local ce = body:match('Compilation Error.-<pre[^>]*>(.-)</pre>')
     local compile_error = nil
     if ce then
       -- Strip any internal HTML tags (like <span>)
       ce = ce:gsub("<[^>]+>", "")
-      compile_error = ce:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&")
+      compile_error = normalize_ws(ce)
     end
 
-    -- Scrape test cases
-    local cases = scrape_test_cases(plain)
+    -- Scrape test cases from raw HTML
+    local cases = scrape_test_cases(body)
 
     -- Build a result data table compatible with show_result
     local data = {
@@ -662,16 +979,19 @@ function M.poll_result_scrape(submission_id, attempt)
       M.show_result(data, true)
       vim.defer_fn(function()
         M.poll_result_scrape(submission_id, attempt + 1)
-      end, 1500)
+      end, 500)
       return
     end
+
+    -- Derive correct result now that we have all the data
+    data.result = derive_result(cases, points, total, data.result)
 
     -- If we still don't have a result after many attempts, show what we have
     if not result or result == "" then
       if attempt < 15 then
         vim.defer_fn(function()
           M.poll_result_scrape(submission_id, attempt + 1)
-        end, 2000)
+        end, 1000)
         return
       end
       data.result = "??"
@@ -721,18 +1041,29 @@ function M.show_result(data, is_processing)
   if data.compile_error and vim.trim(data.compile_error) ~= "" then
     result = "CE"
   else
-    -- Derive correct result from points if the API result seems wrong
+    -- Derive correct result from points if the scraped result seems wrong
     result = derive_result(data.cases, points, total, result)
   end
   data.result = result
 
   local is_accepted = (result == "AC")
-  local num_cases = data.cases and #data.cases or 0
-  local passed = 0
-  if num_cases > 0 then
+  -- Flatten cases (expand batch groups) for counting
+  local flat_cases = {}
+  if data.cases then
     for _, c in ipairs(data.cases) do
-      if c.status == "AC" then passed = passed + 1 end
+      if c.type == "batch" and c.cases then
+        for _, bc in ipairs(c.cases) do
+          table.insert(flat_cases, bc)
+        end
+      elseif c.status then
+        table.insert(flat_cases, c)
+      end
     end
+  end
+  local num_cases = #flat_cases
+  local passed = 0
+  for _, c in ipairs(flat_cases) do
+    if c.status == "AC" then passed = passed + 1 end
   end
 
   -- Calculate popup width (like leetcode.nvim: 70-80% of screen)
@@ -814,18 +1145,22 @@ function M.show_result(data, is_processing)
 
     -- Visual summary bar (like DMOJ's checkmarks/crosses row)
     if num_cases > 0 then
-      local icons = "  "
+      local icon_parts = {}
+      for _, c in ipairs(flat_cases) do
+        local icon_char = c.status == "AC" and "✓" or "✗"
+        table.insert(icon_parts, icon_char)
+      end
+      local icon_line = "  " .. table.concat(icon_parts, " ")
       local icon_row = #lines
-      table.insert(lines, icons)
+      table.insert(lines, icon_line)
       -- Highlight each icon individually
       local col = 2
-      for _, c in ipairs(data.cases) do
+      for _, c in ipairs(flat_cases) do
         local hl = verdict_hl(c.status)
-        -- Each icon is a multi-byte char + space (icon is typically 3 bytes in UTF-8)
         local icon_char = c.status == "AC" and "✓" or "✗"
         local byte_len = #icon_char
         table.insert(hl_lines, { icon_row, hl, col, col + byte_len })
-        col = col + byte_len + 1 -- +1 for the space
+        col = col + byte_len + 1 -- +1 for the space separator
       end
       table.insert(lines, "")
     end
@@ -878,8 +1213,23 @@ function M.show_result(data, is_processing)
           if c.cases then
             for _, bc in ipairs(c.cases) do
               local bc_status = bc.status or "?"
+              local bc_detail_parts = {}
+              if bc.time and bc.time > 0 then
+                table.insert(bc_detail_parts, string.format("%.3fs", bc.time))
+              end
+              if bc.memory and bc.memory > 0 then
+                if bc.memory >= 1024 then
+                  table.insert(bc_detail_parts, string.format("%.2f MB", bc.memory / 1024))
+                else
+                  table.insert(bc_detail_parts, string.format("%.0f KB", bc.memory))
+                end
+              end
+              local bc_detail = ""
+              if #bc_detail_parts > 0 then
+                bc_detail = " [" .. table.concat(bc_detail_parts, ",") .. "]"
+              end
               local bc_label = string.format("    Case %-4s", tostring(bc.case_id or "?"))
-              local bc_line = bc_label .. "  " .. bc_status
+              local bc_line = bc_label .. "  " .. bc_status .. bc_detail
               local bc_row = #lines
               table.insert(lines, bc_line)
               local bc_s = #bc_label + 2
@@ -900,20 +1250,6 @@ function M.show_result(data, is_processing)
   table.insert(lines, "  " .. sep)
   table.insert(lines, "  [q] Close  [o] Open in browser")
   table.insert(lines, "")
-
-  -- Notify with result summary
-  local msg = string.format(
-    "Submission #%d: %s  [%.0f/%.0f pts]",
-    data.id or 0, result, points, total
-  )
-  if num_cases > 0 then
-    msg = msg .. string.format("  %d/%d passed", passed, num_cases)
-  end
-  local level = vim.log.levels.INFO
-  if is_accepted then level = vim.log.levels.INFO
-  else level = vim.log.levels.WARN
-  end
-  ui.notify(msg, level)
 
   local bufnr = ui.create_buf("dmoj://submission/" .. tostring(data.id), lines, { filetype = "dmoj" })
 

@@ -292,6 +292,7 @@ function M.open_telescope()
     local displayer = entry_display.create({
       separator = " ",
       items = {
+        { width = 2 },   -- status icon
         { width = 42 },  -- name
         { width = 22 },  -- category/group
         { width = 8 },   -- points
@@ -300,7 +301,19 @@ function M.open_telescope()
 
     local function make_display(entry)
       local p = entry.problem
+      local icon, icon_hl
+      if p.status == "ac" then
+        icon = "✔"
+        icon_hl = "DiagnosticOk"
+      elseif p.status == "attempted" then
+        icon = "✘"
+        icon_hl = "DiagnosticError"
+      else
+        icon = " "
+        icon_hl = "Comment"
+      end
       return displayer({
+        { icon, icon_hl },
         { p.name or "" },
         { p.group or "", "TelescopeResultsComment" },
         { string.format("%.0f pts", p.points or 0), "TelescopeResultsNumber" },
@@ -379,13 +392,21 @@ function M.open_fallback()
     local lines = {}
     table.insert(lines, string.format(" DMOJ Problems  (%d total)", #problems))
     table.insert(lines, string.rep("─", 80))
-    table.insert(lines, string.format("  %-42s  %-22s  %s", "NAME", "GROUP", "PTS"))
+    table.insert(lines, string.format("     %-42s  %-22s  %s", "NAME", "GROUP", "PTS"))
     table.insert(lines, string.rep("─", 80))
 
     for i, p in ipairs(problems) do
+      local icon
+      if p.status == "ac" then
+        icon = "✔ "
+      elseif p.status == "attempted" then
+        icon = "✘ "
+      else
+        icon = "  "
+      end
       lines[i + 4] = string.format(
-        "  %-42s  %-22s  %.0f pts",
-        (p.name or ""):sub(1, 42), (p.group or ""):sub(1, 22), p.points or 0
+        "%s %-42s  %-22s  %.0f pts",
+        icon, (p.name or ""):sub(1, 42), (p.group or ""):sub(1, 22), p.points or 0
       )
     end
 
@@ -526,6 +547,160 @@ function M.open_problem(code)
 
     -- Fetch and show description in a left split
     description.show(code, meta)
+  end)
+end
+
+--- Open a problem picker and call `on_select(code)` with the chosen problem code.
+--- Reuses the same Telescope/fallback UI as `M.open()`, but instead of opening
+--- the problem it passes the code to the caller's callback.
+---@param on_select fun(code: string) called with the selected problem code
+---@param prompt_title? string custom title for the picker (default "Select a Problem")
+function M.pick_problem(on_select, prompt_title)
+  prompt_title = prompt_title or "Select a Problem"
+
+  local has_telescope, _ = pcall(require, "telescope")
+  if has_telescope then
+    M._pick_telescope(on_select, prompt_title)
+  else
+    M._pick_fallback(on_select, prompt_title)
+  end
+end
+
+--- Telescope picker that calls on_select(code) instead of open_problem.
+---@param on_select fun(code: string)
+---@param prompt_title string
+function M._pick_telescope(on_select, prompt_title)
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+  local entry_display = require("telescope.pickers.entry_display")
+
+  fetch_problems(function(problems)
+    if #problems == 0 then
+      ui.notify("No problems found. Are you logged in?", vim.log.levels.WARN)
+      return
+    end
+
+    local displayer = entry_display.create({
+      separator = " ",
+      items = {
+        { width = 2 },   -- status icon
+        { width = 42 },  -- name
+        { width = 22 },  -- category/group
+        { width = 8 },   -- points
+      },
+    })
+
+    local function make_display(entry)
+      local p = entry.problem
+      local icon, icon_hl
+      if p.status == "ac" then
+        icon = "✔"
+        icon_hl = "DiagnosticOk"
+      elseif p.status == "attempted" then
+        icon = "✘"
+        icon_hl = "DiagnosticError"
+      else
+        icon = " "
+        icon_hl = "Comment"
+      end
+      return displayer({
+        { icon, icon_hl },
+        { p.name or "" },
+        { p.group or "", "TelescopeResultsComment" },
+        { string.format("%.0f pts", p.points or 0), "TelescopeResultsNumber" },
+      })
+    end
+
+    pickers.new({}, {
+      prompt_title = prompt_title,
+      results_title = string.format("%d problems", #problems),
+      finder = finders.new_table({
+        results = problems,
+        entry_maker = function(problem)
+          local search_text = string.format(
+            "%s %s %s %s",
+            problem.name or "",
+            problem.code or "",
+            problem.group or "",
+            table.concat(problem.types or {}, " ")
+          )
+          return {
+            value = problem.code,
+            display = make_display,
+            ordinal = search_text,
+            problem = problem,
+          }
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      attach_mappings = function(prompt_bufnr, _)
+        actions.select_default:replace(function()
+          local entry = action_state.get_selected_entry()
+          actions.close(prompt_bufnr)
+          if entry then
+            on_select(entry.value)
+          end
+        end)
+        return true
+      end,
+    }):find()
+  end)
+end
+
+--- Fallback float picker that calls on_select(code) instead of open_problem.
+---@param on_select fun(code: string)
+---@param prompt_title string
+function M._pick_fallback(on_select, prompt_title)
+  fetch_problems(function(problems)
+    if #problems == 0 then
+      ui.notify("No problems found. Are you logged in?", vim.log.levels.WARN)
+      return
+    end
+
+    local lines = {}
+    table.insert(lines, string.format(" %s  (%d total)", prompt_title, #problems))
+    table.insert(lines, string.rep("─", 80))
+    table.insert(lines, string.format("     %-42s  %-22s  %s", "NAME", "GROUP", "PTS"))
+    table.insert(lines, string.rep("─", 80))
+
+    for i, p in ipairs(problems) do
+      local icon
+      if p.status == "ac" then
+        icon = "✔ "
+      elseif p.status == "attempted" then
+        icon = "✘ "
+      else
+        icon = "  "
+      end
+      lines[i + 4] = string.format(
+        "%s %-42s  %-22s  %.0f pts",
+        icon, (p.name or ""):sub(1, 42), (p.group or ""):sub(1, 22), p.points or 0
+      )
+    end
+
+    table.insert(lines, "")
+    table.insert(lines, string.rep("─", 80))
+    table.insert(lines, " [Enter] Select  [q] Close")
+
+    local bufnr = ui.create_buf("dmoj://pick_problem", lines, { filetype = "dmoj" })
+    local win = ui.open_float(bufnr, { title = prompt_title })
+
+    local kopts = { buffer = bufnr, nowait = true, silent = true }
+
+    vim.keymap.set("n", "<CR>", function()
+      local row = vim.api.nvim_win_get_cursor(0)[1]
+      local idx = row - 4
+      if idx >= 1 and idx <= #problems then
+        local p = problems[idx]
+        if vim.api.nvim_win_is_valid(win) then
+          vim.api.nvim_win_close(win, true)
+        end
+        on_select(p.code)
+      end
+    end, kopts)
   end)
 end
 

@@ -4,60 +4,10 @@ local config = require("dmoj.config")
 local http = require("dmoj.http")
 local auth = require("dmoj.auth")
 
----@return string
-local function api_base()
-  return config.options.base_url .. "/api/v2"
-end
-
---- Generic API v2 GET request (uses API token if set, otherwise cookie).
----@param endpoint string e.g. "/problems"
----@param params? table<string,string> query params
+--- Fetch paginated problem list by scraping the /problems/ web page.
+---@param opts? { page?: number, search?: string }
 ---@param callback fun(data: table|nil, err: string|nil)
-function M.get(endpoint, params, callback)
-  local url = api_base() .. endpoint
-  if params and next(params) then
-    local parts = {}
-    for k, v in pairs(params) do
-      table.insert(parts, k .. "=" .. vim.uri_encode(tostring(v)))
-    end
-    url = url .. "?" .. table.concat(parts, "&")
-  end
-
-  local headers = auth.auth_headers() or {}
-  headers["Accept"] = "application/json"
-
-  -- Also support API token auth
-  local api_token = config.options.api_token
-  if api_token then
-    headers["Authorization"] = "Bearer " .. api_token
-  end
-
-  http.get(url, { headers = headers, follow_redirects = true, timeout = 30 }, function(resp)
-    if resp.status ~= 200 then
-      callback(nil, string.format("API error: HTTP %d", resp.status))
-      return
-    end
-
-    local ok, decoded = pcall(vim.json.decode, resp.body)
-    if not ok then
-      callback(nil, "Failed to parse JSON response")
-      return
-    end
-
-    if decoded.error then
-      callback(nil, decoded.error.message or "Unknown API error")
-      return
-    end
-
-    callback(decoded.data, nil)
-  end)
-end
-
---- Scrape problem list from the /problems/ web page.
---- Used as fallback when the API returns 0 results (org-private instances).
----@param opts? { search?: string }
----@param callback fun(data: table|nil, err: string|nil)
-local function scrape_problems(opts, callback)
+function M.problems(opts, callback)
   opts = opts or {}
   local headers = auth.auth_headers() or {}
   local page = opts.page or 1
@@ -90,12 +40,28 @@ local function scrape_problems(opts, callback)
       )
       if code then
         local group = row:match('<td[^>]*class="[^"]*category[^"]*"[^>]*>([^<]*)</td>') or ""
-        local points = tonumber(row:match('<td[^>]*class="[^"]*points[^"]*"[^>]*>([%d%.]+)</td>')) or 0
+        -- Points column: DMOJ uses class="p" (some instances) or class="points"
+        -- Content may include suffix like "100p" or just "100"
+        local points_str = row:match('<td[^>]*class="p"[^>]*>([^<]*)</td>')
+          or row:match('<td[^>]*class="[^"]*points[^"]*"[^>]*>([^<]*)</td>')
+          or "0"
+        local points = tonumber(points_str:match("([%d%.]+)")) or 0
+        -- Extract solve status from <td solved="1|0|-1"> (DMOJ template)
+        -- solved="1" = accepted (green check), solved="0" = attempted (yellow/red minus),
+        -- solved="-1" or absent = not attempted
+        local solved_attr = row:match('<td%s+solved="([^"]*)"')
+        local status = "none" -- not attempted
+        if solved_attr == "1" then
+          status = "ac"
+        elseif solved_attr == "0" then
+          status = "attempted"
+        end
         table.insert(objects, {
           code = vim.trim(code),
           name = vim.trim(name),
           group = vim.trim(group),
           points = points,
+          status = status,
           types = {},
           partial = false,
           is_public = false,
@@ -124,8 +90,6 @@ local function scrape_problems(opts, callback)
     -- Detect pagination: look for "next page" link or page numbers
     local has_more = false
     local total_pages = page
-    -- Pattern: <a href="?page=N">N</a> or <a href="/problems/?page=N">
-    -- Also check for a "next" link: <a href="...page=N...">›</a> or >></a> or Next</a>
     local max_page = page
     for p in body:gmatch('[?&]page=(%d+)') do
       local pn = tonumber(p)
@@ -149,32 +113,10 @@ local function scrape_problems(opts, callback)
   end)
 end
 
---- Fetch paginated problem list.
---- Tries API v2 first; falls back to scraping /problems/ if API returns 0 results.
----@param opts? { page?: number, search?: string, group?: string, type?: string }
+--- Fetch a single problem's metadata by scraping the problem page.
+---@param code string problem code e.g. "ccc14s4"
 ---@param callback fun(data: table|nil, err: string|nil)
-function M.problems(opts, callback)
-  opts = opts or {}
-  local params = {}
-  if opts.page then params.page = opts.page end
-  if opts.search then params.search = opts.search end
-  if opts.group then params.group = opts.group end
-  if opts.type then params.type = opts.type end
-
-  M.get("/problems", params, function(data, err)
-    -- Fall back to scraping if API returns empty (org-private instance)
-    if err or (data and data.objects and #data.objects == 0) then
-      scrape_problems(opts, callback)
-    else
-      callback(data, err)
-    end
-  end)
-end
-
---- Scrape a single problem's metadata from the web page.
----@param code string
----@param callback fun(data: table|nil, err: string|nil)
-local function scrape_problem(code, callback)
+function M.problem(code, callback)
   local headers = auth.auth_headers() or {}
   local url = config.options.base_url .. "/problem/" .. code
 
@@ -216,48 +158,6 @@ local function scrape_problem(code, callback)
       languages = languages,
     }, nil)
   end)
-end
-
---- Fetch a single problem's metadata.
---- Tries API v2 first; falls back to scraping the problem page.
----@param code string problem code e.g. "ccc14s4"
----@param callback fun(data: table|nil, err: string|nil)
-function M.problem(code, callback)
-  M.get("/problem/" .. code, nil, function(data, err)
-    if data and data.object then
-      callback(data.object, nil)
-    else
-      -- API failed (404 on org-private instances), fall back to scraping
-      scrape_problem(code, callback)
-    end
-  end)
-end
-
---- Fetch submission detail.
----@param id number submission id
----@param callback fun(data: table|nil, err: string|nil)
-function M.submission(id, callback)
-  M.get("/submission/" .. tostring(id), nil, function(data, err)
-    if data and data.object then
-      callback(data.object, nil)
-    else
-      callback(nil, err or "Submission not found")
-    end
-  end)
-end
-
---- Fetch available languages.
----@param callback fun(data: table|nil, err: string|nil)
-function M.languages(callback)
-  M.get("/languages", nil, callback)
-end
-
---- Fetch user submissions for a specific problem.
----@param problem_code string
----@param username string
----@param callback fun(data: table|nil, err: string|nil)
-function M.user_submissions(problem_code, username, callback)
-  M.get("/submissions", { problem = problem_code, user = username }, callback)
 end
 
 return M

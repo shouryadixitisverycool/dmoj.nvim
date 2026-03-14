@@ -6,13 +6,12 @@ local M = {}
 ---@field storage_dir string
 ---@field keymaps table<string, string>
 ---@field open_cmd string
----@field api_token? string
+---@field arg string CLI argument to trigger direct-launch (e.g. "nvim dmoj.nvim")
 
 ---@type dmoj.Config
 M.defaults = {
   base_url = "https://dmoj.ca",
   lang = "CPP17",
-  api_token = nil, -- Optional: DMOJ API token for authenticated API requests
   storage_dir = vim.fn.stdpath("data") .. "/dmoj",
   keymaps = {
     submit = "<leader>ds",
@@ -22,6 +21,7 @@ M.defaults = {
     open_browser = "<leader>do",
   },
   open_cmd = "xdg-open", -- macOS: "open", Windows: "start"
+  arg = "dmoj.nvim",     -- launch arg: `nvim dmoj.nvim` opens the dashboard
 }
 
 ---@type dmoj.Config

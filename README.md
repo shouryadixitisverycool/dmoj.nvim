@@ -11,6 +11,7 @@ Works with [dmoj.ca](https://dmoj.ca) and any self-hosted DMOJ instance (e.g. a 
 - Read problem statements scraped and rendered inline (no browser needed)
 - Submit solutions directly from your buffer using session cookie auth
 - Polls for the judge verdict automatically and shows per-case results
+- Run solutions locally against sample test cases before submitting
 - Solutions stored locally per problem code with correct file extension and comment style
 - Full support for organization-private DMOJ instances (scrapes `/problems/` when API returns empty)
 
@@ -33,6 +34,28 @@ Works with [dmoj.ca](https://dmoj.ca) and any self-hosted DMOJ instance (e.g. a 
   },
   opts = {
     lang = "CPP17",
+  },
+}
+```
+
+To launch directly into the DMOJ dashboard from the terminal (like `leetcode.nvim`):
+
+```bash
+nvim dmoj.nvim
+```
+
+For optimal lazy-loading, only load the plugin eagerly when the arg matches:
+
+```lua
+{
+  "your-username/dmoj.nvim",
+  lazy = "dmoj.nvim" ~= vim.fn.argv(0, -1),
+  dependencies = {
+    "nvim-telescope/telescope.nvim",
+  },
+  opts = {
+    lang = "CPP17",
+    -- arg = "dmoj.nvim",  -- customize if desired (default: "dmoj.nvim")
   },
 }
 ```
@@ -106,10 +129,6 @@ require("dmoj").setup({
   -- Must match DMOJ's language keys (e.g. C, CPP17, PY3, JAVA, RUST, GO ...)
   lang = "CPP17",
 
-  -- Optional: DMOJ API token (from your profile settings page)
-  -- Enables authenticated API reads. Cookie auth is used for submission regardless.
-  api_token = nil,
-
   -- Directory to store cookies and solution files (default: stdpath("data") .. "/dmoj")
   storage_dir = vim.fn.stdpath("data") .. "/dmoj",
 
@@ -117,10 +136,15 @@ require("dmoj").setup({
   -- Linux: "xdg-open", macOS: "open", Windows: "start"
   open_cmd = "xdg-open",
 
+  -- CLI argument for direct-launch: `nvim dmoj.nvim` opens the dashboard
+  -- Set to "" to disable this feature
+  arg = "dmoj.nvim",
+
   -- Default keymaps (set any to false to disable)
   keymaps = {
     list         = "<leader>dl",  -- Open problem list
     submit       = "<leader>ds",  -- Submit current buffer
+    test         = "<leader>dt",  -- Run locally against sample cases
     desc         = "<leader>dd",  -- Show problem description
     open_browser = "<leader>do",  -- Open problem in browser
   },
@@ -152,6 +176,7 @@ require("dmoj").setup({
 | `:Dmoj open <code>` | Open a specific problem by its code |
 | `:Dmoj submit` | Submit the current buffer |
 | `:Dmoj submit <code>` | Submit the current buffer to a specific problem |
+| `:Dmoj run` | Run current buffer locally against sample test cases |
 | `:Dmoj desc` | Show the description for the current problem |
 | `:Dmoj desc <code>` | Show the description for any problem |
 | `:Dmoj result <id>` | Fetch and display a submission result |
@@ -236,30 +261,57 @@ The plugin will:
 1. Scrape the language integer ID from the submit page
 2. POST your source code with your session cookie
 3. Capture the submission ID from the redirect
-4. Poll the API every 1.5s until judging completes
+4. Poll the submission page every 1.5s until judging completes
 5. Display the verdict in a floating window with per-case breakdown
 
 ```
-══════════════════════════════════════════
- Submission #123456
-══════════════════════════════════════════
-
-  Result:    AC
-  Points:    15.0 / 15.0
-  Time:      0.312s
-  Memory:    14532 KB
-  Language:  CPP17
-  Problem:   ds2
-
-──────────────────────────────────────────
- Test Cases
-──────────────────────────────────────────
-  Case 1     AC    0.012s  1234 KB  [1.0/1.0]
-  Case 2     AC    0.015s  1456 KB  [1.0/1.0]
-  Batch 2    [5.0/5.0]
-    Case 3   AC    0.031s  2345 KB  [1.0/1.0]
-    ...
+┌─ ✓ Accepted ──────────────────────────────┐
+│                                            │
+│   Accepted  |  10/10 testcases passed      │
+│                                            │
+│   Score: 100/100  (100%)                   │
+│                                            │
+│   Resources: 0.085s, 1.58 MB               │
+│   Problem:   aplusb                        │
+│                                            │
+│   ──────────────────────────────────────   │
+│                                            │
+│   Execution Results                        │
+│                                            │
+│   ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓                     │
+│                                            │
+│   Test case #1    AC [0.007s, 1.20 MB]     │
+│   Test case #2    AC [0.008s, 1.22 MB]     │
+│   ...                                      │
+│                                            │
+│   ──────────────────────────────────────   │
+│   [q] Close  [o] Open in browser           │
+│                                            │
+└────────────────────────────────────────────┘
 ```
+
+For batched problems, cases are grouped under their batch:
+
+```
+│   Batch 1    [5.0/5.0]                     │
+│     Case 1     AC [0.012s, 1.24 MB]        │
+│     Case 2     AC [0.015s, 1.26 MB]        │
+│   Batch 2    [5.0/5.0]                     │
+│     Case 3     AC [0.031s, 2.34 MB]        │
+│     ...                                    │
+```
+
+## Local Testing
+
+Run `:Dmoj run` (or `<leader>dt`) from your solution buffer.
+
+The plugin will:
+
+1. Extract sample input/output from the problem description page
+2. Compile (if needed) and run your solution against each sample
+3. Show a results floating window comparing expected vs actual output
+
+This runs entirely locally — no submission is made to the judge.
 
 ## File Structure
 
@@ -272,21 +324,23 @@ dmoj.nvim/
     ├── config.lua          # Configuration defaults
     ├── http.lua            # Async curl wrapper (vim.system)
     ├── auth.lua            # Cookie storage, login, CSRF extraction
-    ├── api.lua             # DMOJ API v2 client + scraping fallback
+    ├── api.lua             # DMOJ web scraper (problems, metadata)
     ├── ui.lua              # Floating windows, splits, spinners
     ├── dashboard.lua       # Home screen with ASCII art and menu
     ├── problems.lua        # Telescope picker + open problem workflow
     ├── description.lua     # HTML → plain text renderer
-    └── submit.lua          # Submission, polling, result display
+    ├── submit.lua          # Submission, polling, result display
+    ├── submissions.lua     # Submission history list
+    └── runner.lua          # Local compile+run against sample test cases
 ```
 
 ## Private / Organization DMOJ Instances
 
-Many college OJs run DMOJ with all problems set as organization-private. The DMOJ API v2 returns 0 results for these. dmoj.nvim handles this automatically:
+dmoj.nvim works with private/organization DMOJ instances out of the box. All data is fetched by scraping the web pages directly using cookie-based authentication:
 
-- **Problem list**: falls back to scraping `/problems/` HTML page
-- **Problem metadata**: falls back to scraping the individual problem page
-- **Submission**: uses cookie-based form POST (works regardless of API access)
+- **Problem list**: scraped from `/problems/` HTML page (with pagination)
+- **Problem metadata**: scraped from the individual problem page
+- **Submission**: uses cookie-based form POST
 
 No extra configuration needed — just set `base_url` to your instance.
 
@@ -314,5 +368,6 @@ No extra configuration needed — just set `base_url` to your instance.
 - If the scraping fallback also fails, the instance may require a VPN or specific network access
 
 **Submission times out / no verdict**
-- The plugin polls up to 90 seconds (60 attempts × 1.5s). Very slow judges may exceed this.
+- The plugin polls up to 90 seconds (60 attempts x 1.5s). Very slow judges may exceed this.
 - Use `:Dmoj result <id>` to manually check the result later
+- The plugin scrapes the submission HTML page for results; if your DMOJ instance uses a heavily customized template, the scraping patterns may not match

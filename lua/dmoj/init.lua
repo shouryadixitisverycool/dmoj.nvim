@@ -8,6 +8,33 @@ function M.setup(opts)
   config.setup(opts)
   M._register_commands()
   M._register_keymaps()
+  M._register_arg_handler()
+end
+
+--- Check if Neovim was launched with the configured arg (e.g. `nvim dmoj.nvim`).
+--- If so, take over the session and show the dashboard on VimEnter.
+function M._register_arg_handler()
+  local arg = config.options.arg
+  if not arg or arg == "" then return end
+
+  vim.api.nvim_create_autocmd("VimEnter", {
+    group = vim.api.nvim_create_augroup("dmoj_arg_handler", { clear = true }),
+    pattern = "*",
+    nested = true,
+    callback = function()
+      -- Must have exactly 1 CLI argument matching the configured arg
+      if vim.fn.argc(-1) ~= 1 then return end
+      if vim.fn.argv(0, -1) ~= arg then return end
+
+      -- The buffer must be empty (no real file loaded)
+      local buf = vim.api.nvim_get_current_buf()
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      if #lines > 1 or (#lines == 1 and lines[1] ~= "") then return end
+
+      -- Take over: show the dashboard in the current buffer
+      require("dmoj.dashboard").open()
+    end,
+  })
 end
 
 --- Register all :Dmoj commands.
@@ -24,6 +51,7 @@ function M._register_commands()
       local subcmds = {
         "menu", "list", "open", "submit", "login", "logout",
         "desc", "result", "browser", "refresh", "submissions", "contests", "whoami",
+        "run", "test",
       }
       local parts = vim.split(vim.trim(line), "%s+", { trimempty = true })
       if #parts <= 2 then
@@ -71,8 +99,10 @@ function M._dispatch(subcmd, args)
     })
 
   elseif subcmd == "submissions" then
+    local bufnr = vim.api.nvim_get_current_buf()
+    local code = args[1] or vim.b[bufnr].dmoj_problem_code
     require("dmoj.submissions").open({
-      user = args[1],
+      problem_code = code,
     })
 
   elseif subcmd == "contests" then
@@ -134,8 +164,14 @@ function M._dispatch(subcmd, args)
       vim.fn.jobstart({ config.options.open_cmd, config.options.base_url }, { detach = true })
     end
 
+  elseif subcmd == "run" or subcmd == "test" then
+    require("dmoj.runner").run({
+      problem_code = args[1],
+      lang = args[2],
+    })
+
   else
-    vim.notify("[dmoj] Unknown command: " .. subcmd .. ". Available: menu, list, open, submit, submissions, contests, login, logout, whoami, desc, result, browser", vim.log.levels.ERROR)
+    vim.notify("[dmoj] Unknown command: " .. subcmd .. ". Available: menu, list, open, submit, run, submissions, contests, login, logout, whoami, desc, result, browser", vim.log.levels.ERROR)
   end
 end
 
@@ -166,6 +202,12 @@ function M._register_keymaps()
     vim.keymap.set("n", km.open_browser, function()
       M._dispatch("browser", {})
     end, { desc = "DMOJ: Open in browser" })
+  end
+
+  if km.test then
+    vim.keymap.set("n", km.test, function()
+      M._dispatch("run", {})
+    end, { desc = "DMOJ: Run against sample test cases" })
   end
 end
 
