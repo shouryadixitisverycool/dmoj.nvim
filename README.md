@@ -10,7 +10,7 @@ This project is heavily inspired (straight up plagiarism at this point) by [leet
 
 # dmoj.nvim
 
-Solve [DMOJ] problems without leaving [Neovim]
+Solve [DMOJ](https://dmoj.ca/) problems without leaving [Neovim]
 
 </div>
 
@@ -24,7 +24,6 @@ Solve [DMOJ] problems without leaving [Neovim]
 - [🛠️ Configuration](#️-configuration)
 - [📋 Commands](#-commands-1)
 - [🚀 Usage](#-usage)
-- [🖼️ Gallery](#️-gallery)
 - [🔒 Security](#-security)
 - [❓ FAQ](#-faq)
 
@@ -206,28 +205,6 @@ Or from within Neovim: `:Dmoj`
 From contest detail: `Enter` to join, `Backspace` to leave, `q` to go back.
 
 **Private/organization DMOJ instances** — set `base_url` in config. All data is scraped via cookie auth; no API v2 dependency.
-
-## 🖼️ Gallery
-
-> Replace placeholder links by dragging screenshots into any GitHub issue to get upload URLs.
-
-**Dashboard**
-![Dashboard](https://github.com/user-attachments/assets/placeholder-dashboard)
-
-**Problem picker (Telescope)**
-![Problem Picker](https://github.com/user-attachments/assets/placeholder-picker)
-
-**Problem description + solution split**
-![Problem Description](https://github.com/user-attachments/assets/placeholder-description)
-
-**Submission verdict**
-![Submission Verdict](https://github.com/user-attachments/assets/placeholder-verdict)
-
-**Contest browser**
-![Contest Browser](https://github.com/user-attachments/assets/placeholder-contests)
-
-**Local test runner**
-![Local Runner](https://github.com/user-attachments/assets/placeholder-runner)
 
 ## 🔒 Security
 
